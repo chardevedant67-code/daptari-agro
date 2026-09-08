@@ -1,0 +1,75 @@
+# ─── Dependencies ───────────────────────────────────────────────────────────
+node_modules/
+**/node_modules/
+
+# ─── Environment / Secrets ──────────────────────────────────────────────────
+.env
+**/.env
+.env.local
+.env.*.local
+.env.production
+
+# ─── Build Output ───────────────────────────────────────────────────────────
+dist/
+build/
+**/dist/
+**/build/
+
+# ─── Logs ───────────────────────────────────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ─── OS Files ───────────────────────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Editor / IDE ───────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.suo
+*.sw?
+
+# ─── Claude Code ────────────────────────────────────────────────────────────
+.claude/
+
+# ─── React Native – iOS ─────────────────────────────────────────────────────
+**/ios/Pods/
+**/ios/build/
+**/ios/DerivedData/
+**/ios/*.xcworkspace/xcuserdata/
+**/ios/.xcode.env.local
+**/ios/*.pbxproj.bak
+
+# ─── React Native – Android ─────────────────────────────────────────────────
+**/android/build/
+**/android/.gradle/
+**/android/.kotlin/
+**/android/app/build/
+**/android/local.properties
+*.keystore
+!**/android/app/debug.keystore
+*.jks
+
+# ─── Ruby / CocoaPods ───────────────────────────────────────────────────────
+**/vendor/bundle/
+**/vendor/cache/
+
+# ─── Server Uploads (user-generated files, not source code) ─────────────────
+server/uploads/products/*
+server/uploads/qr/*
+server/uploads/weigh-photos/*
+# Keep the empty folder structure
+!server/uploads/products/.gitkeep
+!server/uploads/qr/.gitkeep
+!server/uploads/weigh-photos/.gitkeep
+
+# ─── Misc Dev Artefacts ─────────────────────────────────────────────────────
+screen*.png
+PROJECT_REPORT.html
+build.bat

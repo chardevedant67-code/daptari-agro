@@ -1,0 +1,132 @@
+require Pod::Executable.execute_command('node', ['-p',
+  'require.resolve(
+    "react-native/scripts/react_native_pods.rb",
+    {paths: [process.argv[1]]},
+  )', __dir__]).strip
+
+platform :ios, '15.5'
+prepare_react_native_project!
+
+target 'weighingqrios' do
+  config = use_native_modules!
+
+  use_react_native!(
+    :path => config[:reactNativePath],
+    :app_path => "#{Pod::Config.instance.installation_root}/.."
+  )
+
+  post_install do |installer|
+    react_native_post_install(
+      installer,
+      config[:reactNativePath],
+      :mac_catalyst_enabled => false,
+    )
+
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |config|
+        config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+        config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = ''
+        config.build_settings['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO'
+
+        if config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'].to_f < 15.5
+          config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.5'
+        end
+      end
+    end
+
+    require 'xcodeproj'
+    main_proj_path = File.join(File.dirname(__FILE__), 'weighingqrios.xcodeproj')
+    main_project = Xcodeproj::Project.open(main_proj_path)
+    main_project.targets.each do |target|
+      next unless target.name == 'weighingqrios'
+      target.build_configurations.each do |config|
+        config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = ''
+        config.build_settings['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO'
+      end
+
+      group = main_project.main_group.find_subpath('weighingqrios', false)
+      group ||= main_project.main_group
+
+      ['weighingqrios/MLKitStubs.mm', 'weighingqrios/RNQRImageScanner.mm'].each do |rel|
+        abs = File.join(File.dirname(__FILE__), rel)
+        next unless File.exist?(abs)
+        basename = File.basename(abs)
+        already = target.source_build_phase.files.any? { |f|
+          f.file_ref&.path&.end_with?(basename)
+        }
+        unless already
+          file_ref = group.new_file(abs)
+          target.source_build_phase.add_file_reference(file_ref)
+          Pod::UI.puts "Added #{basename} to weighingqrios target"
+        end
+      end
+    end
+    main_project.save
+
+    # Patch MLKit static libraries for arm64 iOS Simulator compatibility
+    patch_py = <<~'PYTHON'
+import struct, sys, os, tempfile, shutil, subprocess
+
+def patch_obj_file(path):
+    data = bytearray(open(path, 'rb').read())
+    if struct.unpack_from('<I', data, 0)[0] != 0xFEEDFACF:
+        return False
+    ncmds = struct.unpack_from('<I', data, 16)[0]
+    offset, patched = 32, False
+    for _ in range(ncmds):
+        if offset + 8 > len(data): break
+        cmd = struct.unpack_from('<I', data, offset)[0]
+        size = struct.unpack_from('<I', data, offset + 4)[0]
+        if size == 0: break
+        if cmd == 0x32 and offset + 12 <= len(data):
+            if struct.unpack_from('<I', data, offset + 8)[0] == 2:
+                struct.pack_into('<I', data, offset + 8, 7)
+                patched = True
+        offset += size
+    if patched:
+        open(path, 'wb').write(bytes(data))
+    return patched
+
+fw = sys.argv[1]
+tmp = tempfile.mkdtemp()
+try:
+    arm64_a = os.path.join(tmp, 'arm64.a')
+    subprocess.run(['lipo', '-thin', 'arm64', '-output', arm64_a, fw], capture_output=True)
+    obj_dir = os.path.join(tmp, 'objs')
+    os.makedirs(obj_dir)
+    subprocess.run(['ar', 'x', arm64_a], cwd=obj_dir, capture_output=True)
+    objs = [os.path.join(obj_dir, f) for f in os.listdir(obj_dir) if f.endswith('.o')]
+    count = sum(patch_obj_file(o) for o in objs)
+    if count > 0:
+        new_a = os.path.join(tmp, 'arm64_sim.a')
+        subprocess.run(['ar', 'cr', new_a] + objs, capture_output=True)
+        subprocess.run(['ranlib', new_a], capture_output=True)
+        out = os.path.join(tmp, 'out.a')
+        r = subprocess.run(['lipo', fw, '-replace', 'arm64', new_a, '-output', out], capture_output=True)
+        if r.returncode == 0:
+            shutil.copy2(out, fw)
+            print(f"Patched {count} objects in {os.path.basename(fw)}")
+        else:
+            print(f"lipo failed: {r.stderr.decode().strip()}")
+    else:
+        print(f"Already patched or no objects found in {os.path.basename(fw)}")
+finally:
+    shutil.rmtree(tmp, ignore_errors=True)
+PYTHON
+    script_path = File.join(Dir.tmpdir, 'patch_mlkit.py')
+    File.write(script_path, patch_py)
+
+    pods_root = installer.sandbox.root
+    [
+      'MLImage/Frameworks/MLImage.framework/MLImage',
+      'MLKitBarcodeScanning/Frameworks/MLKitBarcodeScanning.framework/MLKitBarcodeScanning',
+      'MLKitCommon/Frameworks/MLKitCommon.framework/MLKitCommon',
+      'MLKitVision/Frameworks/MLKitVision.framework/MLKitVision',
+    ].each do |fw_relative|
+      fw_path = File.join(pods_root, fw_relative)
+      next unless File.exist?(fw_path)
+      result = `python3 #{script_path} #{fw_path} 2>&1`.strip
+      Pod::UI.puts result unless result.empty?
+    end
+  end
+end
