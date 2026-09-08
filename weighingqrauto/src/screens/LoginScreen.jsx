@@ -5,7 +5,8 @@ import Icon from 'react-native-vector-icons/MaterialIcons';
 import {useDispatch, useSelector} from 'react-redux';
 import {useNavigation} from '../navigation/StackNavigator';
 import {COLORS, RADIUS, SHADOWS, SPACING} from '../ui/theme';
-import {loginThunk, clearError} from '../store/slices/userSlice';
+import {loginThunk, fetchMeThunk, clearError} from '../store/slices/userSlice';
+import {ensureReachableBaseUrl, checkServerConnection} from '../services/serverConfig';
 
 export default function LoginScreen() {
   const navigation = useNavigation();
@@ -17,10 +18,23 @@ export default function LoginScreen() {
   const [showPw,   setShowPw]   = useState(false);
   const [emailErr, setEmailErr] = useState('');
   const [pwErr,    setPwErr]    = useState('');
+  const [serverStatus, setServerStatus] = useState('checking'); // 'checking' | 'found' | 'not-found'
 
   useEffect(() => {
     dispatch(clearError());
-    return () => dispatch(clearError());
+
+    let cancelled = false;
+    (async () => {
+      const url = await ensureReachableBaseUrl();
+      const reachable = url ? await checkServerConnection(url) : false;
+      if (cancelled) return;
+      setServerStatus(reachable ? 'found' : 'not-found');
+    })();
+
+    return () => {
+      cancelled = true;
+      dispatch(clearError());
+    };
   }, [dispatch]);
 
   const validate = () => {
@@ -40,6 +54,7 @@ export default function LoginScreen() {
 
     const result = await dispatch(loginThunk({email: email.trim(), password}));
     if (loginThunk.fulfilled.match(result)) {
+      dispatch(fetchMeThunk()); // verify token against protectUser, non-blocking
       navigation.replace('MainTabs');
     }
   };
@@ -105,10 +120,25 @@ export default function LoginScreen() {
         />
         {!!pwErr && <Text style={styles.errText}>{pwErr}</Text>}
 
+        {serverStatus !== 'found' && (
+          <View style={[styles.serverErrBox, serverStatus === 'checking' && styles.serverInfoBox]}>
+            <Icon
+              name={serverStatus === 'checking' ? 'wifi-tethering' : 'wifi-off'}
+              size={16}
+              color={serverStatus === 'checking' ? COLORS.primary : COLORS.danger}
+            />
+            <Text style={[styles.serverErrTxt, serverStatus === 'checking' && {color: COLORS.primary}]}>
+              {serverStatus === 'checking'
+                ? 'Finding server on local network...'
+                : 'Server not found. Make sure your phone and computer are connected to the same WiFi.'}
+            </Text>
+          </View>
+        )}
+
         {!!error && (
           <View style={styles.serverErrBox}>
             <Icon name="error-outline" size={16} color={COLORS.danger} />
-            <Text style={styles.serverErrTxt}>{error}</Text>
+            <Text style={styles.serverErrTxt}>{error.message || error}</Text>
           </View>
         )}
 
@@ -166,6 +196,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 10, marginBottom: SPACING.md,
   },
   serverErrTxt: {color: COLORS.danger, fontSize: 13, fontWeight: '600', flex: 1},
+  serverInfoBox: {backgroundColor: '#e0e7ff'},
   signInBtn: {borderRadius: RADIUS.md, marginTop: SPACING.sm},
   signInContent: {height: 52},
   signInLabel: {fontSize: 16, fontWeight: '700', letterSpacing: 0.3, color: '#ffffff'},

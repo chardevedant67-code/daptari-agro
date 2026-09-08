@@ -1,6 +1,11 @@
 import {createSlice, createAsyncThunk} from '@reduxjs/toolkit';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {BASE_URL} from '../../config';
+import {apiFetch, ApiError} from '../../services/apiClient';
+
+const asErrorPayload = err => ({
+  type: err instanceof ApiError ? err.type : 'network',
+  message: err?.message || 'Connection failed.',
+});
 
 // ── Thunks ────────────────────────────────────────
 
@@ -8,25 +13,30 @@ export const loginThunk = createAsyncThunk(
   'user/login',
   async ({email, password}, {rejectWithValue}) => {
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 10000);
-      const res = await fetch(`${BASE_URL}/api/user/login`, {
+      const data = await apiFetch('/api/user/login', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({email, password}),
-        signal: controller.signal,
+        body: {email, password},
       });
-      clearTimeout(timer);
-      const data = await res.json();
-      if (!data.success) return rejectWithValue(data.message || 'Login failed');
       await AsyncStorage.setItem('@session_user', JSON.stringify(data.user));
       await AsyncStorage.setItem('@session_token', data.token);
       return {user: data.user, token: data.token};
     } catch (err) {
-      if (err.name === 'AbortError') {
-        return rejectWithValue(`Server timeout — check WiFi and server is running`);
-      }
-      return rejectWithValue(`Connection failed: ${err.message}`);
+      return rejectWithValue(asErrorPayload(err));
+    }
+  },
+);
+
+export const registerThunk = createAsyncThunk(
+  'user/register',
+  async ({name, email, password}, {rejectWithValue}) => {
+    try {
+      const data = await apiFetch('/api/user/register', {
+        method: 'POST',
+        body: {name, email, password},
+      });
+      return {user: data.user};
+    } catch (err) {
+      return rejectWithValue(asErrorPayload(err));
     }
   },
 );
@@ -36,13 +46,29 @@ export const loadSessionThunk = createAsyncThunk(
   async (_, {rejectWithValue}) => {
     try {
       const userStr = await AsyncStorage.getItem('@session_user');
-      const token   = await AsyncStorage.getItem('@session_token');
+      const token = await AsyncStorage.getItem('@session_token');
       if (userStr && token) {
         return {user: JSON.parse(userStr), token};
       }
       return null;
     } catch {
       return rejectWithValue(null);
+    }
+  },
+);
+
+// Confirms the stored JWT is still valid against protectUser (GET
+// /api/user/me). Non-fatal on failure — session stays intact so a
+// momentary network blip on app open doesn't sign the user out.
+export const fetchMeThunk = createAsyncThunk(
+  'user/fetchMe',
+  async (_, {getState, rejectWithValue}) => {
+    try {
+      const {token} = getState().user;
+      const data = await apiFetch('/api/user/me', {method: 'GET', token});
+      return data.user;
+    } catch (err) {
+      return rejectWithValue(asErrorPayload(err));
     }
   },
 );
@@ -56,17 +82,15 @@ export const updateProfileThunk = createAsyncThunk(
   'user/updateProfile',
   async ({name, email, token}, {rejectWithValue}) => {
     try {
-      const res = await fetch(`${BASE_URL}/api/user/me`, {
+      const data = await apiFetch('/api/user/me', {
         method: 'PUT',
-        headers: {'Content-Type': 'application/json', Authorization: `Bearer ${token}`},
-        body: JSON.stringify({name, email}),
+        token,
+        body: {name, email},
       });
-      const data = await res.json();
-      if (!data.success) return rejectWithValue(data.message);
       await AsyncStorage.setItem('@session_user', JSON.stringify(data.user));
       return data.user;
-    } catch {
-      return rejectWithValue('Failed to update profile');
+    } catch (err) {
+      return rejectWithValue(asErrorPayload(err).message);
     }
   },
 );
@@ -76,46 +100,80 @@ export const updateProfileThunk = createAsyncThunk(
 const userSlice = createSlice({
   name: 'user',
   initialState: {
-    user:    null,
-    token:   null,
+    user: null,
+    token: null,
     loading: false,
-    error:   null,
+    error: null,
     sessionLoaded: false,
   },
   reducers: {
-    clearError: (state) => { state.error = null; },
+    clearError: state => {
+      state.error = null;
+    },
   },
-  extraReducers: (builder) => {
+  extraReducers: builder => {
     // Login
     builder
-      .addCase(loginThunk.pending,   (s) => { s.loading = true;  s.error = null; })
+      .addCase(loginThunk.pending, s => {
+        s.loading = true;
+        s.error = null;
+      })
       .addCase(loginThunk.fulfilled, (s, a) => {
         s.loading = false;
-        s.user    = a.payload.user;
-        s.token   = a.payload.token;
+        s.user = a.payload.user;
+        s.token = a.payload.token;
       })
-      .addCase(loginThunk.rejected,  (s, a) => {
+      .addCase(loginThunk.rejected, (s, a) => {
         s.loading = false;
-        s.error   = a.payload;
+        s.error = a.payload;
+      });
+
+    // Register
+    builder
+      .addCase(registerThunk.pending, s => {
+        s.loading = true;
+        s.error = null;
+      })
+      .addCase(registerThunk.fulfilled, s => {
+        s.loading = false;
+      })
+      .addCase(registerThunk.rejected, (s, a) => {
+        s.loading = false;
+        s.error = a.payload;
       });
 
     // Load session
     builder
       .addCase(loadSessionThunk.fulfilled, (s, a) => {
         s.sessionLoaded = true;
-        if (a.payload) { s.user = a.payload.user; s.token = a.payload.token; }
+        if (a.payload) {
+          s.user = a.payload.user;
+          s.token = a.payload.token;
+        }
       })
-      .addCase(loadSessionThunk.rejected, (s) => { s.sessionLoaded = true; });
+      .addCase(loadSessionThunk.rejected, s => {
+        s.sessionLoaded = true;
+      });
+
+    // Fetch current user (session verification)
+    builder.addCase(fetchMeThunk.fulfilled, (s, a) => {
+      s.user = a.payload;
+    });
 
     // Logout
-    builder.addCase(logoutThunk.fulfilled, (s) => {
-      s.user = null; s.token = null;
+    builder.addCase(logoutThunk.fulfilled, s => {
+      s.user = null;
+      s.token = null;
     });
 
     // Update profile
     builder
-      .addCase(updateProfileThunk.fulfilled, (s, a) => { s.user = a.payload; })
-      .addCase(updateProfileThunk.rejected,  (s, a) => { s.error = a.payload; });
+      .addCase(updateProfileThunk.fulfilled, (s, a) => {
+        s.user = a.payload;
+      })
+      .addCase(updateProfileThunk.rejected, (s, a) => {
+        s.error = a.payload;
+      });
   },
 });
 
