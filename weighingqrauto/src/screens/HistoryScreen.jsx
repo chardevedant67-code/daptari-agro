@@ -3,9 +3,9 @@ import {useFocusEffect} from '@react-navigation/native';
 import {ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View} from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import {COLORS, RADIUS, SHADOWS, SPACING} from '../ui/theme';
+import {fetchPacketHistory} from '../services/api';
 
-import {BASE_URL} from '../config';
-const TABS = ['All', 'PASS', 'FAIL'];
+const TABS = ['All', 'Gain', 'Loss'];
 
 export default function HistoryScreen() {
   const [records, setRecords] = useState([]);
@@ -13,18 +13,12 @@ export default function HistoryScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState(0);
 
+  // Reads real saved measurements (filled SeedPackets) from MongoDB via
+  // GET /api/packets — no mock/hardcoded data.
   const fetchRecords = useCallback(async () => {
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 5000);
-      const res = await fetch(`${BASE_URL}/p/api/records`, {signal: controller.signal});
-      clearTimeout(timer);
-      const data = await res.json();
-      if (data.success) {
-        setRecords(data.records || []);
-      } else {
-        setRecords([]);
-      }
+      const packets = await fetchPacketHistory();
+      setRecords(packets || []);
     } catch (_) {
       setRecords([]);
     } finally {
@@ -37,29 +31,35 @@ export default function HistoryScreen() {
 
   const onRefresh = () => { setRefreshing(true); fetchRecords(); };
 
-  const filtered = activeTab === 0 ? records : records.filter(r => r.status === TABS[activeTab]);
+  const filtered = activeTab === 0
+    ? records
+    : records.filter(r => (activeTab === 1 ? (r.difference ?? 0) >= 0 : (r.difference ?? 0) < 0));
 
-  const passCount = records.filter(r => r.status === 'PASS').length;
-  const passRate = records.length ? Math.round((passCount / records.length) * 100) : 0;
+  const avgDiff = records.length
+    ? records.reduce((s, r) => s + (r.difference || 0), 0) / records.length
+    : 0;
 
   const renderItem = ({item}) => {
-    const isWarn = item.status === 'WARN';
-    const isFail = item.status === 'FAIL';
-    const iconName = isFail ? 'cancel' : isWarn ? 'warning' : 'inventory';
-    const iconColor = isFail ? COLORS.danger : isWarn ? '#ca8a04' : COLORS.primary;
-    const iconBg = isFail ? '#fee2e2' : isWarn ? '#fef9c3' : COLORS.track;
+    const diff = item.difference;
+    const isLoss = diff != null && diff < 0;
+    const iconColor = isLoss ? '#ca8a04' : COLORS.primary;
+    const iconBg = isLoss ? '#fef9c3' : COLORS.track;
     return (
       <View style={styles.record}>
         <View style={[styles.recordIcon, {backgroundColor: iconBg}]}>
-          <Icon name={iconName} size={20} color={iconColor} />
+          <Icon name="inventory" size={20} color={iconColor} />
         </View>
         <View style={styles.recordInfo}>
-          <Text style={styles.recordName}>{item.product?.productName || '—'}</Text>
-          <Text style={styles.recordMeta}>{item.machine?.machineId || '—'} · {item.machine?.name || ''}</Text>
+          <Text style={styles.recordName}>{item.batchId?.seedType || '—'}</Text>
+          <Text style={styles.recordMeta}>{item.uniqueId} · {item.batchId?.batchNumber || ''}</Text>
         </View>
         <View style={styles.recordRight}>
-          <Text style={[styles.recordWeight, {color: iconColor}]}>{item.actualWeight} kg</Text>
-          <Text style={styles.recordTime}>{new Date(item.createdAt).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</Text>
+          <Text style={[styles.recordWeight, {color: iconColor}]}>
+            {diff != null ? `${diff >= 0 ? '+' : ''}${diff.toFixed(2)} kg` : '—'}
+          </Text>
+          <Text style={styles.recordTime}>
+            {item.afterTime ? new Date(item.afterTime).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : ''}
+          </Text>
         </View>
       </View>
     );
@@ -93,8 +93,8 @@ export default function HistoryScreen() {
         </View>
         <View style={styles.summaryDivider} />
         <View style={styles.summaryRight}>
-          <Text style={styles.summaryLbl}>PASS RATE</Text>
-          <Text style={[styles.summaryVal, {color: passRate >= 80 ? '#86efac' : '#fde68a'}]}>{passRate}%</Text>
+          <Text style={styles.summaryLbl}>AVG DIFFERENCE</Text>
+          <Text style={styles.summaryVal}>{avgDiff >= 0 ? '+' : ''}{avgDiff.toFixed(2)} kg</Text>
         </View>
       </View>
 

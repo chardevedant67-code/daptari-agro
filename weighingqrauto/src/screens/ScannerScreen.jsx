@@ -196,9 +196,9 @@ export default function ScannerScreen() {
       scannedRef.current = true;
       setLoading(true);
       setError('');
-      const product = await fetchProductByScan(productId);
+      const packet = await fetchProductByScan(productId);
       setLoading(false);
-      navigation.push('ProductDetail', {product});
+      navigation.push('ProductDetail', {packet});
     } catch (err) {
       setLoading(false);
       scannedRef.current = false;
@@ -218,9 +218,9 @@ export default function ScannerScreen() {
     setError('');
 
     try {
-      const product = await fetchProductByScan(productId);
+      const packet = await fetchProductByScan(productId);
       setLoading(false);
-      navigation.push('ProductDetail', {product});
+      navigation.push('ProductDetail', {packet});
     } catch (err) {
       setLoading(false);
       setError(err.message || 'Product not found');

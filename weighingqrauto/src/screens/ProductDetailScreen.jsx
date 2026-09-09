@@ -1,24 +1,21 @@
-import React, {useEffect, useState} from 'react';
+import React from 'react';
 import {
   Image,
   Pressable, ScrollView,
-  StyleSheet, Text, View, ActivityIndicator,
+  StyleSheet, Text, View,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import {useNavigation, useRoute} from '@react-navigation/native';
 import {COLORS, RADIUS, SHADOWS, SPACING} from '../ui/theme';
-import {fetchLatestRecord} from '../services/api';
 import {BASE_URL} from '../config';
 
-// Maps seedType / product name keywords → gradient colors + icon + accent
+// Maps seedType keywords → gradient colors + icon + accent
 const SEED_THEMES = {
-  // Exact seedType matches (from AddProduct)
   'Organic':     {colors: ['#14532d','#166534','#15803d'], icon: 'local-florist',         accent: '#4ade80', label: 'Organic Seed'},
   'Hybrid':      {colors: ['#1e3a5f','#1d4ed8','#2563eb'], icon: 'science',               accent: '#60a5fa', label: 'Hybrid Variety'},
   'Heirloom':    {colors: ['#713f12','#92400e','#b45309'], icon: 'grass',                 accent: '#fcd34d', label: 'Heirloom Seed'},
   'Modified':    {colors: ['#4c1d95','#6d28d9','#7c3aed'], icon: 'biotech',               accent: '#c4b5fd', label: 'Modified Seed'},
-  // Keyword matches for productName / seedType free text
   'wheat':       {colors: ['#78350f','#92400e','#d97706'], icon: 'grain',                 accent: '#fde68a', label: 'Wheat'},
   'rice':        {colors: ['#064e3b','#065f46','#047857'], icon: 'spa',                   accent: '#6ee7b7', label: 'Rice'},
   'corn':        {colors: ['#713f12','#a16207','#ca8a04'], icon: 'agriculture',           accent: '#fef08a', label: 'Corn / Maize'},
@@ -30,24 +27,22 @@ const SEED_THEMES = {
   'sunflower':   {colors: ['#713f12','#a16207','#eab308'], icon: 'wb-sunny',              accent: '#fef08a', label: 'Sunflower'},
   'cotton':      {colors: ['#1e3a5f','#1e40af','#3b82f6'], icon: 'cloud',                accent: '#bfdbfe', label: 'Cotton'},
   'barley':      {colors: ['#78350f','#a16207','#d97706'], icon: 'grain',                 accent: '#fde68a', label: 'Barley'},
-  'default':     {colors: ['#1e3a5f','#1a227f','#3730a3'], icon: 'local-florist',         accent: '#a5b4fc', label: 'Seed Product'},
+  'default':     {colors: ['#1e3a5f','#1a227f','#3730a3'], icon: 'local-florist',         accent: '#a5b4fc', label: 'Seed Packet'},
 };
 
-function getTheme(product) {
-  const name = (product.productName || '').toLowerCase();
-  const type = (product.seedType || '');
-  // Exact seedType match first
+function getTheme(seedType) {
+  const type = seedType || '';
+  const name = type.toLowerCase();
   if (SEED_THEMES[type]) return SEED_THEMES[type];
-  // Keyword search in product name
   for (const key of Object.keys(SEED_THEMES)) {
     if (key !== 'default' && name.includes(key)) return SEED_THEMES[key];
   }
   return SEED_THEMES.default;
 }
 
-// Unique decorative circles per product (based on productId char codes)
-function getBubbles(productId = '') {
-  const seed = productId.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+// Unique decorative circles per packet (based on uniqueId char codes)
+function getBubbles(uniqueId = '') {
+  const seed = uniqueId.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
   return [
     {size: 140, top: -40, right: -30, op: 0.12, offset: seed % 20},
     {size: 90,  top: 60,  right: 80,  op: 0.09, offset: (seed * 3) % 30},
@@ -56,21 +51,19 @@ function getBubbles(productId = '') {
   ];
 }
 
-function ProductBanner({product, onBack, recordPhoto}) {
-  const theme   = getTheme(product);
-  const bubbles = getBubbles(product.productId);
-  const photoUri = product.imageUrl ? `${BASE_URL}${product.imageUrl}` : recordPhoto || null;
+function PacketBanner({packet, batch, onBack}) {
+  const theme    = getTheme(batch?.seedType);
+  const bubbles  = getBubbles(packet.uniqueId);
+  const photoUri = packet.photoUrl ? `${BASE_URL}${packet.photoUrl}` : null;
 
   return (
     <View style={styles.imageBanner}>
       {photoUri ? (
-        // Real product photo
         <>
           <Image source={{uri: photoUri}} style={StyleSheet.absoluteFill} resizeMode="cover" />
           <LinearGradient colors={['transparent', 'rgba(0,0,0,0.70)']} style={styles.bannerOverlay} />
         </>
       ) : (
-        // Fallback gradient with icon
         <LinearGradient colors={theme.colors} style={StyleSheet.absoluteFill}>
           {bubbles.map((b, i) => (
             <View key={i} style={[styles.bubble, {
@@ -87,18 +80,17 @@ function ProductBanner({product, onBack, recordPhoto}) {
           <LinearGradient colors={['transparent', 'rgba(0,0,0,0.60)']} style={styles.bannerOverlay} />
         </LinearGradient>
       )}
-      {/* Back button */}
       <Pressable style={styles.backBtn} onPress={onBack}>
         <Icon name="arrow-back" size={20} color="#fff" />
       </Pressable>
-      {/* Product name badge */}
       <View style={styles.bannerBadge}>
         <Icon name={theme.icon} size={13} color="#fff" />
-        <Text style={styles.bannerBadgeTxt}>{product.productName}</Text>
+        <Text style={styles.bannerBadgeTxt}>{batch?.seedType || 'Seed Packet'}</Text>
       </View>
-      {/* Seed type tag */}
       <View style={[styles.bannerTag, {backgroundColor: theme.accent + 'cc'}]}>
-        <Text style={[styles.bannerTagTxt, {color: theme.colors[0]}]}>{theme.label}</Text>
+        <Text style={[styles.bannerTagTxt, {color: theme.colors[0]}]}>
+          {packet.status === 'filled' ? 'Weighed' : 'Not Yet Weighed'}
+        </Text>
       </View>
     </View>
   );
@@ -107,52 +99,45 @@ function ProductBanner({product, onBack, recordPhoto}) {
 export default function ProductDetailScreen() {
   const navigation = useNavigation();
   const route = useRoute();
-  const product = route.params?.product;
-  const [record, setRecord] = useState(null);
+  const packet = route.params?.packet;
 
-  useEffect(() => {
-    if (product?.productId) {
-      fetchLatestRecord(product.productId).then(r => setRecord(r));
-    }
-  }, [product]);
-
-
-  if (!product) {
+  if (!packet) {
     return (
       <View style={styles.centerWrap}>
-        <ActivityIndicator color={COLORS.primary} size="large" />
-        <Text style={styles.loadingTxt}>Loading product...</Text>
+        <Icon name="error-outline" size={40} color={COLORS.muted} />
+        <Text style={styles.loadingTxt}>No packet data</Text>
       </View>
     );
   }
 
-  const created = new Date(product.createdAt).toLocaleDateString('en-US', {
-    year: 'numeric', month: 'short', day: 'numeric',
-  });
+  const batch = packet.batchId; // populated by GET /api/packets/:uniqueId
+  const filled = packet.status === 'filled';
 
+  const batchCreated = batch?.createdAt
+    ? new Date(batch.createdAt).toLocaleDateString('en-US', {year: 'numeric', month: 'short', day: 'numeric'})
+    : '—';
+
+  // Only fields that actually exist on SeedBatch/SeedPacket are shown here —
+  // there is no Warehouse/Rack/Shelf/Year/Month field in the current schema,
+  // so those are intentionally not displayed rather than shown as fake data.
   const infoCards = [
-    {icon: 'qr-code',        label: 'Product ID', value: product.productId},
-    {icon: 'location-on',    label: 'Location',   value: product.storageLocation},
-    {icon: 'inventory-2',    label: 'Batch',       value: product.batchNumber},
-    {icon: 'local-florist',  label: 'Seed Type',   value: product.seedType},
-    {icon: 'person',         label: 'Added By',    value: product.createdBy?.name || 'System'},
-    {icon: 'calendar-today', label: 'Created',     value: created},
+    {icon: 'qr-code',        label: 'Packet ID',     value: packet.uniqueId},
+    {icon: 'inventory-2',    label: 'Batch Number',  value: batch?.batchNumber || '—'},
+    {icon: 'local-florist',  label: 'Seed Type',     value: batch?.seedType || '—'},
+    {icon: 'calendar-today', label: 'Batch Created', value: batchCreated},
   ];
 
-  const recordPhoto = record?.photoUrl ? `${BASE_URL}${record.photoUrl}` : null;
-  const recordWeight = record?.actualWeight;
-  const recordTime = record?.createdAt
-    ? new Date(record.createdAt).toLocaleString('en-US', {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'})
-    : null;
+  const photoUri = packet.photoUrl ? `${BASE_URL}${packet.photoUrl}` : null;
+  const diff = packet.difference;
 
   return (
     <View style={styles.root}>
-      <ProductBanner product={product} onBack={() => navigation.goBack()} recordPhoto={recordPhoto} />
+      <PacketBanner packet={packet} batch={batch} onBack={() => navigation.goBack()} />
 
       <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
         <View style={styles.headerCard}>
-          <Text style={styles.productName}>{product.productName}</Text>
-          <Text style={styles.productSub}>{product.seedType} · {product.storageLocation}</Text>
+          <Text style={styles.productName}>{batch?.seedType || 'Seed Packet'}</Text>
+          <Text style={styles.productSub}>{batch?.batchName || packet.uniqueId}</Text>
         </View>
 
         <View style={styles.grid}>
@@ -165,12 +150,10 @@ export default function ProductDetailScreen() {
           ))}
         </View>
 
-
-        {/* Last weigh record */}
-        {record ? (
+        {filled ? (
           <View style={styles.recordSection}>
             <Pressable style={styles.recordTitleRow} onPress={() => navigation.navigate('MainTabs', {initialTab: 'history'})}>
-              <Text style={styles.recordTitle}>Last Weigh Record</Text>
+              <Text style={styles.recordTitle}>Measurement</Text>
               <View style={styles.viewHistoryBtn}>
                 <Text style={styles.viewHistoryTxt}>View History</Text>
                 <Icon name="chevron-right" size={16} color={COLORS.primary} />
@@ -178,23 +161,36 @@ export default function ProductDetailScreen() {
             </Pressable>
             <View style={styles.weightRow}>
               <View style={styles.weightBox}>
-                <Icon name="scale" size={20} color={COLORS.primary} />
-                <Text style={styles.weightVal}>{recordWeight?.toFixed(2)} kg</Text>
-                <Text style={styles.weightLbl}>Recorded Weight</Text>
+                <Icon name="scale" size={18} color={COLORS.primary} />
+                <Text style={styles.weightVal}>{packet.beforeWeight?.toFixed(2) ?? '—'}</Text>
+                <Text style={styles.weightLbl}>Before (kg)</Text>
               </View>
-              {recordTime && (
-                <View style={styles.weightBox}>
-                  <Icon name="schedule" size={20} color={COLORS.muted} />
-                  <Text style={[styles.weightVal, {fontSize: 14}]}>{recordTime}</Text>
-                  <Text style={styles.weightLbl}>Weighed At</Text>
-                </View>
-              )}
+              <View style={styles.weightBox}>
+                <Icon name="scale" size={18} color={COLORS.primary} />
+                <Text style={styles.weightVal}>{packet.afterWeight?.toFixed(2) ?? '—'}</Text>
+                <Text style={styles.weightLbl}>After (kg)</Text>
+              </View>
+              <View style={[styles.weightBox, {borderRightWidth: 0}]}>
+                <Icon name="calculate" size={18} color={COLORS.success} />
+                <Text style={[styles.weightVal, {color: COLORS.success}]}>
+                  {diff != null ? `${diff >= 0 ? '+' : ''}${diff.toFixed(2)}` : '—'}
+                </Text>
+                <Text style={styles.weightLbl}>Diff (kg)</Text>
+              </View>
+            </View>
+            {photoUri && (
+              <Image source={{uri: photoUri}} style={styles.recordPhoto} resizeMode="cover" />
+            )}
+            <View style={{paddingHorizontal: SPACING.md, paddingBottom: SPACING.md, paddingTop: photoUri ? SPACING.sm : 0}}>
+              <Text style={styles.weightLbl}>
+                Weighed {packet.afterTime ? new Date(packet.afterTime).toLocaleString('en-US', {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'}) : '—'}
+              </Text>
             </View>
           </View>
         ) : (
           <View style={styles.noRecordCard}>
             <Icon name="scale" size={24} color={COLORS.muted} />
-            <Text style={styles.noRecordTxt}>No weigh record yet</Text>
+            <Text style={styles.noRecordTxt}>Not yet weighed</Text>
           </View>
         )}
 
@@ -244,12 +240,6 @@ const styles = StyleSheet.create({
   bannerTagTxt: {fontSize: 11, fontWeight: '800', letterSpacing: 0.5},
   scroll: {flex: 1},
   headerCard: {paddingHorizontal: SPACING.lg, paddingTop: SPACING.lg, paddingBottom: SPACING.md},
-  statusBadge: {
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(26,34,127,0.10)',
-    borderRadius: RADIUS.pill, paddingHorizontal: 10, paddingVertical: 4, marginBottom: 8,
-  },
-  statusTxt: {fontSize: 11, fontWeight: '800', color: COLORS.primary, letterSpacing: 1},
   productName: {fontSize: 26, fontWeight: '800', color: COLORS.text, marginBottom: 4},
   productSub: {fontSize: 14, color: COLORS.muted},
   grid: {
@@ -262,33 +252,6 @@ const styles = StyleSheet.create({
   },
   infoLabel: {fontSize: 11, color: COLORS.muted, fontWeight: '600', marginBottom: 2},
   infoValue: {fontSize: 13, fontWeight: '700', color: COLORS.text},
-  qrCard: {
-    marginHorizontal: SPACING.lg, marginBottom: SPACING.md,
-    backgroundColor: COLORS.white, borderRadius: RADIUS.md,
-    padding: SPACING.lg, alignItems: 'center', ...SHADOWS.card,
-  },
-  qrTitle: {fontSize: 13, fontWeight: '700', color: COLORS.text, marginBottom: 12},
-  qrImage: {width: 160, height: 160},
-  qrSub: {fontSize: 11, color: COLORS.muted, marginTop: 8},
-  qrPlaceholder: {alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.bg, borderRadius: RADIUS.md},
-  qrBtnRow: {flexDirection: 'row', gap: SPACING.sm, marginTop: SPACING.md},
-  qrBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: COLORS.primary, borderRadius: RADIUS.pill,
-    paddingHorizontal: 20, paddingVertical: 9,
-  },
-  qrBtnOutline: {
-    backgroundColor: COLORS.track,
-  },
-  qrBtnTxt: {fontSize: 13, fontWeight: '700', color: COLORS.white},
-  qrDataCard: {
-    marginHorizontal: SPACING.lg, marginBottom: SPACING.md,
-    flexDirection: 'row', alignItems: 'flex-start', gap: 8,
-    backgroundColor: 'rgba(26,34,127,0.04)',
-    borderRadius: RADIUS.md, padding: SPACING.md,
-    borderWidth: 1, borderColor: 'rgba(26,34,127,0.1)',
-  },
-  qrDataTxt: {fontSize: 11, color: COLORS.muted, fontFamily: 'monospace', flex: 1, lineHeight: 16},
   recordSection: {marginHorizontal: SPACING.lg, marginBottom: SPACING.md, backgroundColor: COLORS.white, borderRadius: RADIUS.lg, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.border, ...SHADOWS.card},
   recordTitleRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: COLORS.border},
   recordTitle:   {fontSize: 13, fontWeight: '700', color: COLORS.text, padding: SPACING.md},
@@ -297,7 +260,7 @@ const styles = StyleSheet.create({
   recordPhoto:   {width: '100%', height: 200},
   weightRow:     {flexDirection: 'row'},
   weightBox:     {flex: 1, alignItems: 'center', padding: SPACING.md, gap: 4, borderRightWidth: 1, borderRightColor: COLORS.border},
-  weightVal:     {fontSize: 20, fontWeight: '800', color: COLORS.text},
+  weightVal:     {fontSize: 18, fontWeight: '800', color: COLORS.text},
   weightLbl:     {fontSize: 11, color: COLORS.muted, fontWeight: '600'},
   noRecordCard:  {marginHorizontal: SPACING.lg, flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: COLORS.white, borderRadius: RADIUS.md, padding: SPACING.md, borderWidth: 1, borderColor: COLORS.border},
   noRecordTxt:   {fontSize: 13, color: COLORS.muted},
