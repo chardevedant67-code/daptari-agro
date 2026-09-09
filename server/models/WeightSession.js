@@ -7,6 +7,8 @@ const WeightSessionSchema = new mongoose.Schema({
   beforeTime:   { type: Date,   default: null },
   afterWeight:  { type: Number, default: null },
   afterTime:    { type: Date,   default: null },
+  difference:   { type: Number, default: null },
+  operator:     { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   linkedPacket: { type: mongoose.Schema.Types.ObjectId, ref: 'SeedPacket', default: null },
 }, { timestamps: true });
 

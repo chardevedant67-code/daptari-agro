@@ -1,6 +1,25 @@
 const express    = require('express');
 const router     = express.Router();
 const SeedPacket = require('../models/SeedPacket');
+const Product    = require('../models/Product');
+
+// GET /p/api/:productId — public Product lookup used by the mobile QR scanner
+// (fetchProductByScan in weighingqrauto/src/services/api.js). Registered
+// before /:uniqueId below so it takes precedence for the /api/... path.
+router.get('/api/:productId', async (req, res) => {
+  try {
+    const product = await Product.findOne({ productId: req.params.productId })
+      .populate('createdBy', 'name email');
+
+    if (!product) {
+      return res.status(404).json({ success: false, message: 'Product not found' });
+    }
+
+    res.json({ success: true, product });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 
 // GET /scan/:uniqueId  — public HTML page shown when QR is scanned
 router.get('/:uniqueId', async (req, res) => {

@@ -2,10 +2,25 @@ const express  = require('express');
 const path     = require('path');
 const fs       = require('fs');
 const multer   = require('multer');
+const jwt      = require('jsonwebtoken');
 const router   = express.Router();
 const WeightSession = require('../models/WeightSession');
 const SeedPacket    = require('../models/SeedPacket');
 const LiveWeight    = require('../models/LiveWeight');
+
+// This flow stays intentionally unauthenticated (kiosk-style field use), but
+// if the mobile app sends a logged-in user's JWT we record who weighed the
+// packet. A missing/invalid token is not an error — operator stays null.
+async function getOperatorId(req) {
+  const header = req.headers.authorization;
+  if (!header || !header.startsWith('Bearer ')) return null;
+  try {
+    const decoded = jwt.verify(header.split(' ')[1], process.env.JWT_SECRET);
+    return decoded.id || null;
+  } catch (_) {
+    return null;
+  }
+}
 
 // Photo upload config
 const photoDir = path.join(__dirname, '..', 'uploads', 'session-photos');
@@ -22,7 +37,8 @@ const upload = multer({
 // POST /api/sessions — start new session
 router.post('/', async (req, res) => {
   try {
-    const session = await WeightSession.create({ status: 'active' });
+    const operator = await getOperatorId(req);
+    const session = await WeightSession.create({ status: 'active', operator });
     res.status(201).json({ success: true, sessionId: session._id, session });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -86,9 +102,19 @@ router.post('/:id/after-weight', async (req, res) => {
 
     session.afterWeight = Number(weight);
     session.afterTime   = new Date();
+    // Difference is computed and persisted here (server-side), not left to
+    // the mobile UI, so the saved record is authoritative.
+    if (session.beforeWeight != null) {
+      session.difference = session.afterWeight - session.beforeWeight;
+    }
     await session.save();
 
-    res.json({ success: true, afterWeight: session.afterWeight, afterTime: session.afterTime });
+    res.json({
+      success: true,
+      afterWeight: session.afterWeight,
+      afterTime: session.afterTime,
+      difference: session.difference,
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -111,6 +137,8 @@ router.post('/:id/link/:uniqueId', async (req, res) => {
     packet.beforeTime   = session.beforeTime;
     packet.afterWeight  = session.afterWeight;
     packet.afterTime    = session.afterTime;
+    packet.difference   = session.difference;
+    packet.operator     = session.operator;
     packet.sessionId    = session._id;
     packet.status       = 'filled';
     packet.linkedAt     = new Date();
@@ -120,7 +148,9 @@ router.post('/:id/link/:uniqueId', async (req, res) => {
     session.linkedPacket = packet._id;
     await session.save();
 
-    const populated = await SeedPacket.findById(packet._id).populate('batchId', 'seedType batchNumber batchName seedCode batchCode');
+    const populated = await SeedPacket.findById(packet._id)
+      .populate('batchId', 'seedType batchNumber batchName seedCode batchCode')
+      .populate('operator', 'name');
 
     res.json({ success: true, message: 'Data linked to QR', packet: populated });
   } catch (err) {
