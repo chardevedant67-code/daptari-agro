@@ -18,14 +18,9 @@ export default function ForgotPassword() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setLoading(true);
-    setError('');
-    
-    // Simulate API call
-    setTimeout(() => {
-      setLoading(false);
-      setSuccess(true);
-    }, 1500);
+    // No backend password-reset endpoint exists yet — do not fabricate a
+    // "sent" confirmation. Tell the user honestly instead.
+    setError('Password recovery is not available yet. Please contact your system administrator to reset your password.');
   };
 
   return (

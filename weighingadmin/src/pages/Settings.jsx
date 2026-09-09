@@ -46,13 +46,9 @@ export default function Settings() {
       setTimeout(() => controller.abort(), 4000);
       await adminAPI.update(admin?.id, { name: name.trim(), email: email.trim() });
       setProfileMsg('Profile updated successfully!');
-    } catch (_) {
-      // Server offline — update localStorage only
-      const stored = JSON.parse(localStorage.getItem('admin') || '{}');
-      stored.name  = name.trim();
-      stored.email = email.trim();
-      localStorage.setItem('admin', JSON.stringify(stored));
-      setProfileMsg('Profile saved locally!');
+    } catch (err) {
+      // Do not claim success when the update wasn't actually persisted.
+      setProfileErr(err.response?.data?.message || 'Unable to save changes — server unreachable');
     }
     setProfileLoading(false);
   };

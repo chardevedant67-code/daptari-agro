@@ -1,4 +1,4 @@
-import { Box, Typography, Avatar, IconButton, Badge, InputBase, Paper } from '@mui/material';
+import { Box, Typography, Avatar, IconButton, InputBase, Paper } from '@mui/material';
 import NotificationsIcon from '@mui/icons-material/Notifications';
 import SearchIcon from '@mui/icons-material/Search';
 import { useAuth } from '../context/AuthContext';
@@ -30,9 +30,7 @@ export default function PageHeader({ title, subtitle, actions, showSearch = fals
         {actions}
 
         <IconButton size="small" sx={{ border: '1px solid #e2e8f0', borderRadius: 2 }}>
-          <Badge badgeContent={3} color="error">
-            <NotificationsIcon sx={{ fontSize: 20, color: '#64748b' }} />
-          </Badge>
+          <NotificationsIcon sx={{ fontSize: 20, color: '#64748b' }} />
         </IconButton>
 
         <Avatar sx={{ width: 34, height: 34, background: 'linear-gradient(135deg,#1a227f,#6366f1)', fontSize: 13, fontWeight: 700 }}>{initials}</Avatar>
