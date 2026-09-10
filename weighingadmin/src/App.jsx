@@ -6,7 +6,6 @@ import Login from './pages/Login';
 import ForgotPassword from './pages/ForgotPassword';
 import Dashboard from './pages/Dashboard';
 import Products from './pages/Products';
-import AddProduct from './pages/AddProduct';
 import EditProduct from './pages/EditProduct';
 import Settings from './pages/Settings';
 import Batches from './pages/Batches';
@@ -37,7 +36,12 @@ export default function App() {
             <Route path="/forgot-password" element={<PublicRoute><ForgotPassword /></PublicRoute>} />
             <Route path="/dashboard"    element={<PrivateRoute><Dashboard /></PrivateRoute>} />
             <Route path="/products"     element={<PrivateRoute><Products /></PrivateRoute>} />
-            <Route path="/products/add"      element={<PrivateRoute><AddProduct /></PrivateRoute>} />
+            {/* "Add Product" used to render its own duplicate batch-creation
+                form here (it always called POST /api/batches). The Batches
+                page's "New Batch" dialog is the one real creation flow, so
+                this old route now redirects there instead of maintaining a
+                second, diverging form (see Step 10). */}
+            <Route path="/products/add"      element={<Navigate to="/batches" replace />} />
             <Route path="/products/edit/:id" element={<PrivateRoute><EditProduct /></PrivateRoute>} />
             <Route path="/batches"      element={<PrivateRoute><Batches /></PrivateRoute>} />
             <Route path="/machines"     element={<PrivateRoute><Machines /></PrivateRoute>} />

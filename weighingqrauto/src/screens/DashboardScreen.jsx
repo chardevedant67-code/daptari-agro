@@ -7,7 +7,7 @@ import {useNavigation} from '../navigation/StackNavigator';
 import {COLORS, RADIUS, SHADOWS, SPACING} from '../ui/theme';
 import NotificationPanel from '../ui/components/NotificationPanel';
 
-import {BASE_URL} from '../config';
+import {fetchSessions} from '../services/api';
 
 export default function DashboardScreen() {
   const navigation = useNavigation();
@@ -17,28 +17,33 @@ export default function DashboardScreen() {
   const [stats, setStats] = useState(null);
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [notifVisible, setNotifVisible] = useState(false);
 
+  // Real current-system data only (SeedBatch → SeedPacket → WeightSession).
+  // "Recent Records" shows the last 5 completed (linked) measurements;
+  // "Total Measurements" is the server's own count for that same filter
+  // (`pagination.total`), so it stays accurate regardless of how many rows
+  // were actually fetched. "Active Sessions" replaces the old legacy
+  // Pass-Rate card, which has no equivalent in WeightSession — rather than
+  // invent a fake rate, this shows a different, real, currently-meaningful
+  // number instead.
   const loadData = useCallback(async () => {
-    setLoading(true);
+    setLoading(true); setError('');
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 5000);
-      const res = await fetch(`${BASE_URL}/p/api/records`, {signal: controller.signal});
-      clearTimeout(timer);
-      const recData = await res.json();
-      if (recData.success) {
-        const recs = recData.records || [];
-        setRecords(recs.slice(0, 3));
-        const pass = recs.filter(r => r.status === 'PASS').length;
-        setStats({total: recs.length, passRate: recs.length ? Math.round((pass / recs.length) * 100) : 0});
-      } else {
-        setRecords([]);
-        setStats({total: 0, passRate: 0});
-      }
-    } catch (_) {
+      const [linked, active] = await Promise.all([
+        fetchSessions({status: 'linked', limit: 5}),
+        fetchSessions({status: 'active', limit: 1}),
+      ]);
+      setRecords(linked.sessions || []);
+      setStats({
+        totalMeasurements: linked.pagination?.total ?? (linked.sessions || []).length,
+        activeSessions: active.pagination?.total ?? 0,
+      });
+    } catch (err) {
+      setError(err.message || 'Could not load dashboard data');
       setRecords([]);
-      setStats({total: 0, passRate: 0});
+      setStats(null);
     }
     setLoading(false);
   }, []);
@@ -46,8 +51,8 @@ export default function DashboardScreen() {
   useFocusEffect(useCallback(() => { loadData(); }, [loadData]));
 
   const statCards = [
-    {icon: 'scale', label: 'Total Weighings', value: stats?.total ?? '—', color: COLORS.primary},
-    {icon: 'check-circle', label: 'Pass Rate', value: stats ? `${stats.passRate}%` : '—', color: '#16a34a'},
+    {icon: 'scale', label: 'Total Measurements', value: stats?.totalMeasurements ?? '—', color: COLORS.primary},
+    {icon: 'pending-actions', label: 'Active Sessions', value: stats?.activeSessions ?? '—', color: '#ca8a04'},
   ];
 
   const displayName = user?.name || 'Operator';
@@ -128,22 +133,38 @@ export default function DashboardScreen() {
           </Pressable>
         </View>
 
-        {/* Recent records preview */}
-        {!loading && records.length > 0 && (
+        {/* Error state — a failed request never falls back to fake/local data */}
+        {!loading && !!error && (
+          <View style={styles.emptyBox}>
+            <Icon name="error-outline" size={36} color={COLORS.danger} />
+            <Text style={[styles.emptyTxt, {color: COLORS.danger}]}>{error}</Text>
+            <Pressable style={styles.retryBtn} onPress={loadData}>
+              <Icon name="refresh" size={16} color={COLORS.white} />
+              <Text style={styles.retryTxt}>Retry</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {/* Recent records preview — real completed (linked) WeightSessions */}
+        {!loading && !error && records.length > 0 && (
           <>
             <Text style={styles.sectionTitle}>Recent Records</Text>
-            {records.map((r, i) => {
-              const isFail = r.status === 'FAIL';
+            {records.map((s, i) => {
+              const m = s.measurement;
+              const diff = m.difference;
+              const isLoss = diff != null && diff < 0;
               return (
-                <View key={r._id || i} style={styles.recentCard}>
-                  <View style={[styles.recentIcon, {backgroundColor: isFail ? '#fee2e2' : COLORS.track}]}>
-                    <Icon name={isFail ? 'cancel' : 'inventory'} size={18} color={isFail ? '#dc2626' : COLORS.primary} />
+                <View key={m.sessionId || i} style={styles.recentCard}>
+                  <View style={[styles.recentIcon, {backgroundColor: isLoss ? '#fef9c3' : COLORS.track}]}>
+                    <Icon name="inventory" size={18} color={isLoss ? '#ca8a04' : COLORS.primary} />
                   </View>
                   <View style={styles.recentInfo}>
-                    <Text style={styles.recentName}>{r.product?.productName || '—'}</Text>
-                    <Text style={styles.recentMeta}>{r.machine?.machineId || '—'}</Text>
+                    <Text style={styles.recentName}>{s.batch?.seedType || 'Seed Packet'}</Text>
+                    <Text style={styles.recentMeta}>{m.packetUniqueId || s.packet?.uniqueId || '—'}</Text>
                   </View>
-                  <Text style={[styles.recentWeight, {color: isFail ? '#dc2626' : COLORS.primary}]}>{r.actualWeight} kg</Text>
+                  <Text style={[styles.recentWeight, {color: isLoss ? '#ca8a04' : COLORS.primary}]}>
+                    {diff != null ? `${diff >= 0 ? '+' : ''}${diff.toFixed(2)} kg` : '—'}
+                  </Text>
                 </View>
               );
             })}
@@ -151,7 +172,7 @@ export default function DashboardScreen() {
         )}
 
         {/* Empty state when no records */}
-        {!loading && records.length === 0 && (
+        {!loading && !error && records.length === 0 && (
           <View style={styles.emptyBox}>
             <Icon name="history" size={36} color={COLORS.muted} />
             <Text style={styles.emptyTxt}>No records yet</Text>
@@ -223,7 +244,9 @@ const styles = StyleSheet.create({
   recentMeta: {fontSize: 11, color: COLORS.muted},
   recentWeight: {fontSize: 14, fontWeight: '800'},
   emptyBox: {alignItems: 'center', paddingVertical: SPACING.lg, gap: SPACING.sm},
-  emptyTxt: {fontSize: 14, color: COLORS.muted, fontWeight: '600'},
+  emptyTxt: {fontSize: 14, color: COLORS.muted, fontWeight: '600', textAlign: 'center'},
+  retryBtn: {flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: COLORS.primary, borderRadius: RADIUS.md, paddingHorizontal: 16, paddingVertical: 9, marginTop: 2},
+  retryTxt: {color: COLORS.white, fontWeight: '700', fontSize: 13},
   grid: {flexDirection: 'row', gap: SPACING.md},
   gridCard: {flex: 1, backgroundColor: COLORS.white, borderRadius: RADIUS.lg, padding: SPACING.md, borderWidth: 1, borderColor: COLORS.border, ...SHADOWS.card},
   gridIcon: {width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', marginBottom: SPACING.sm},

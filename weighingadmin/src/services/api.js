@@ -62,6 +62,13 @@ export const dashboardAPI = {
   stats: () => api.get('/dashboard/stats'),
 };
 
+// ── Weighing Sessions (current system: SeedBatch → SeedPacket → WeightSession) ──
+// Real weighing/measurement history — GET /api/sessions (added in Step 4).
+// Never reads the legacy WeightRecord collection.
+export const sessionAPI = {
+  getAll: (params) => api.get('/sessions', { params }),
+};
+
 // ── Batches ───────────────────────────────────────
 export const batchAPI = {
   create:   (data) => api.post('/batches', data),

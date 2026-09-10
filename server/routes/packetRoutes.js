@@ -7,7 +7,7 @@ const SeedPacket = require('../models/SeedPacket');
 router.get('/', async (req, res) => {
   try {
     const packets = await SeedPacket.find({ status: 'filled' })
-      .populate('batchId', 'seedType batchNumber batchName seedCode batchCode')
+      .populate('batchId', 'seedType batchNumber batchName seedCode batchCode month year warehouse rack shelf')
       .populate('operator', 'name')
       .sort({ linkedAt: -1 })
       .limit(200);
@@ -22,7 +22,7 @@ router.get('/', async (req, res) => {
 router.get('/:uniqueId', async (req, res) => {
   try {
     const packet = await SeedPacket.findOne({ uniqueId: req.params.uniqueId })
-      .populate('batchId', 'seedType batchNumber batchName seedCode batchCode count createdAt');
+      .populate('batchId', 'seedType batchNumber batchName seedCode batchCode count createdAt month year warehouse rack shelf');
 
     if (!packet) return res.status(404).json({ success: false, message: 'Packet not found' });
 

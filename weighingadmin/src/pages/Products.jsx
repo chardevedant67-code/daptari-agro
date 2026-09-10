@@ -5,7 +5,7 @@ import {
   Box, Button, Card, Chip, Dialog, DialogActions, DialogContent,
   DialogContentText, DialogTitle, Grid, IconButton, LinearProgress,
   Menu, MenuItem, Tab, Tabs, Table, TableBody, TableCell, TableContainer,
-  TableHead, TableRow, Typography, InputBase, Paper
+  TableHead, TableRow, Typography, InputBase, Paper, Snackbar, Alert
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import SearchIcon from '@mui/icons-material/Search';
@@ -19,6 +19,7 @@ import EcoIcon from '@mui/icons-material/LocalFlorist';
 import Layout from '../components/Layout';
 import StatCard from '../components/StatCard';
 import PageHeader from '../components/PageHeader';
+import NewBatchDialog from '../components/NewBatchDialog';
 
 function printQRLabel(product) {
   const qrSrc = `http://localhost:5001${product.qrCodeUrl}`;
@@ -99,6 +100,12 @@ export default function Products() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
+  // New Batch dialog — opens directly on this page instead of redirecting
+  // to /batches. Products has no SeedBatch data of its own to refresh on
+  // success, so onCreated just surfaces the real result via a snackbar.
+  const [createOpen, setCreateOpen] = useState(false);
+  const [successMsg, setSuccessMsg] = useState('');
+
   const openMenu = (e, product) => { setMenuAnchor(e.currentTarget); setMenuProduct(product); };
   const closeMenu = () => { setMenuAnchor(null); };
 
@@ -145,9 +152,9 @@ export default function Products() {
         subtitle="Manage all registered product batches and QR labels"
         showSearch={false}
         actions={
-          <Button variant="contained" startIcon={<AddIcon />} onClick={() => navigate('/products/add')}
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}
             sx={{ background: 'linear-gradient(135deg,#1a227f,#3d47a3)' }}>
-            New Product
+            New Batch
           </Button>
         }
       />
@@ -279,6 +286,18 @@ export default function Products() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <NewBatchDialog
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onCreated={(data) => setSuccessMsg(`${data.packets.length} QR codes generated for "${data.batch.batchName}"`)}
+      />
+      <Snackbar open={!!successMsg} autoHideDuration={5000} onClose={() => setSuccessMsg('')}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
+        <Alert severity="success" onClose={() => setSuccessMsg('')} sx={{ borderRadius: 2 }}>
+          {successMsg}
+        </Alert>
+      </Snackbar>
     </Layout>
   );
 }

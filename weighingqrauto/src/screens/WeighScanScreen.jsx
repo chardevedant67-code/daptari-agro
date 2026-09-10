@@ -23,8 +23,10 @@ import {launchCamera, launchImageLibrary} from 'react-native-image-picker';
 import {useDispatch, useSelector} from 'react-redux';
 import {useNavigation} from '../navigation/StackNavigator';
 import {COLORS, RADIUS, SHADOWS, SPACING} from '../ui/theme';
+import {BASE_URL} from '../config';
 import {
   fetchProductByScan,
+  findActiveSessionForPacket,
   createWeighSession,
   uploadSessionPhoto,
   saveBeforeWeight,
@@ -41,25 +43,44 @@ function extractProductId(raw) {
   return s;
 }
 
-const STEPS = ['Scan QR', 'Before', 'Photo', 'After'];
+const STEPS = ['Scan QR', 'Before Wt', 'Before Photo', 'After Wt', 'After Photo'];
+
+// Same absolute-vs-relative rule ProductDetailScreen already uses: Cloudinary
+// secure_urls are absolute and must be used as-is; only the legacy local-disk
+// fallback path needs BASE_URL prepended.
+function resolvePhotoUri(url) {
+  if (!url) return null;
+  return /^https?:\/\//i.test(url) ? url : `${BASE_URL}${url}`;
+}
 
 export default function WeighScanScreen() {
   const navigation = useNavigation();
   const dispatch = useDispatch();
   const token = useSelector(state => state.user.token);
 
-  // step: 1=scan, 2=before weight, 3=photo, 4=after weight + save, 5=done
+  // step: 1=scan, 2=before weight, 3=before photo, 4=after weight, 5=after photo + save, 6=done
   const [step, setStep]               = useState(1);
   const [packet, setPacket]           = useState(null);
-  const [photoUri, setPhotoUri]       = useState(null);
+  const [sessionId, setSessionId]     = useState(null);
+  const [beforePhotoUri, setBeforePhotoUri] = useState(null);
+  const [afterPhotoUri, setAfterPhotoUri]   = useState(null);
   const [beforeWeightVal, setBeforeWeightVal] = useState('');
   const [afterWeightVal, setAfterWeightVal]   = useState('');
   const [linkedPacket, setLinkedPacket] = useState(null);
   const [saving, setSaving]           = useState(false);
   const [error, setError]             = useState('');
   const [camPerm, setCamPerm]         = useState(null);
+  // Remote photo URLs from a RESUMED session — display-only, never passed to
+  // uploadSessionPhoto. A photo already on the server never needs re-upload;
+  // reaching the step that would re-upload it (before-photo/after-photo) is
+  // itself skipped whenever the corresponding URL below is already set.
+  const [resumedBeforePhotoUrl, setResumedBeforePhotoUrl] = useState(null);
+  const [resumedAfterPhotoUrl, setResumedAfterPhotoUrl]   = useState(null);
 
   const scannedRef = useRef(false);
+  // Guards the actual session-creation request specifically — a rapid
+  // double-tap on "Next" at Step 2 must never fire createWeighSession twice.
+  const creatingSessionRef = useRef(false);
 
   // Camera permission — needed for step 1 (QR scan)
   useEffect(() => {
@@ -85,6 +106,72 @@ export default function WeighScanScreen() {
     if (step === 1) scannedRef.current = false;
   }, [step]);
 
+  // A filled packet's permanent QR is still perfectly valid to scan — it
+  // just must never start a NEW weighing session. Show the existing
+  // packet/measurement instead (same screen ScannerScreen already uses for
+  // this), so the user can see it was already weighed without redesigning
+  // this screen.
+  const handleAlreadyFilled = useCallback((p) => {
+    dispatch(addNotification({
+      type: 'INFO',
+      title: 'Already Weighed',
+      body: 'This packet has already been weighed.',
+    }));
+    scannedRef.current = false;
+    navigation.push('ProductDetail', {packet: p});
+  }, [dispatch, navigation]);
+
+  // Given a freshly-scanned EMPTY packet, checks for an already-unfinished
+  // (active) session for it and either resumes it or starts fresh. Returns
+  // false (and sets an error) only for the unsafe "multiple active sessions"
+  // case, so the caller knows not to proceed.
+  const resumeOrStartFresh = useCallback(async (uniqueId) => {
+    let activeSessions = [];
+    try {
+      activeSessions = await findActiveSessionForPacket(uniqueId);
+    } catch (_) {
+      // Lookup failing isn't fatal — fall back to starting fresh. The
+      // backend's own unique-active-session guard at creation time still
+      // prevents a real duplicate if one turns out to exist.
+      activeSessions = [];
+    }
+
+    if (activeSessions.length > 1) {
+      setError('Multiple active sessions exist for this packet — contact admin.');
+      return false;
+    }
+
+    setSessionId(null);
+    setBeforeWeightVal(''); setAfterWeightVal('');
+    setBeforePhotoUri(null); setAfterPhotoUri(null);
+    setResumedBeforePhotoUrl(null); setResumedAfterPhotoUrl(null);
+
+    if (activeSessions.length === 1) {
+      const m = activeSessions[0].measurement;
+      setSessionId(m.sessionId);
+      setBeforeWeightVal(m.beforeWeight != null ? String(m.beforeWeight) : '');
+      setAfterWeightVal(m.afterWeight != null ? String(m.afterWeight) : '');
+      setResumedBeforePhotoUrl(m.beforePhotoUrl || null);
+      setResumedAfterPhotoUrl(m.afterPhotoUrl || null);
+
+      let resumeStep;
+      if (m.beforeWeight == null) resumeStep = 2;
+      else if (!m.beforePhotoUrl) resumeStep = 3;
+      else if (m.afterWeight == null) resumeStep = 4;
+      else resumeStep = 5;
+      setStep(resumeStep);
+
+      dispatch(addNotification({
+        type: 'INFO',
+        title: 'Resuming Weighing',
+        body: 'An unfinished session for this packet was found — continuing where you left off.',
+      }));
+    } else {
+      setStep(2);
+    }
+    return true;
+  }, [dispatch]);
+
   // Gallery QR pick
   const handleGalleryPick = useCallback(async () => {
     if (scannedRef.current) return;
@@ -99,13 +186,18 @@ export default function WeighScanScreen() {
       scannedRef.current = true;
       setError('');
       const p = await fetchProductByScan(uniqueId);
+      if (p.status === 'filled') {
+        handleAlreadyFilled(p);
+        return;
+      }
       setPacket(p);
-      setStep(2);
+      const ok = await resumeOrStartFresh(uniqueId);
+      if (!ok) { scannedRef.current = false; return; }
     } catch (err) {
       scannedRef.current = false;
       setError(err.message || 'Could not read QR from image');
     }
-  }, []);
+  }, [handleAlreadyFilled, resumeOrStartFresh]);
 
   // QR scanned
   const handleQRScanned = useCallback(async (event) => {
@@ -117,62 +209,144 @@ export default function WeighScanScreen() {
     setError('');
     try {
       const p = await fetchProductByScan(uniqueId);
+      if (p.status === 'filled') {
+        handleAlreadyFilled(p);
+        return;
+      }
       setPacket(p);
-      setStep(2);
+      const ok = await resumeOrStartFresh(uniqueId);
+      if (!ok) { setTimeout(() => { scannedRef.current = false; }, 2500); return; }
     } catch (err) {
       setError(err.message || 'Packet not found');
       setTimeout(() => { scannedRef.current = false; }, 2500);
     }
-  }, []);
+  }, [handleAlreadyFilled, resumeOrStartFresh]);
 
-  // Take photo
-  const handleTakePhoto = async () => {
+  // Take photo — reused for both the before and after capture steps, just
+  // targeting whichever state setter is passed in.
+  const handleTakePhoto = async (setter) => {
     setError('');
     try {
       const result = await launchCamera({mediaType: 'photo', saveToPhotos: true, quality: 0.8});
       if (result.didCancel || !result.assets?.length) return;
-      setPhotoUri(result.assets[0].uri);
+      setter(result.assets[0].uri);
     } catch (_) {
       setError('Camera not available — use gallery instead');
     }
   };
 
-  // Pick photo from gallery
-  const handlePickPhoto = async () => {
+  // Pick photo from gallery — same reuse pattern as handleTakePhoto.
+  const handlePickPhoto = async (setter) => {
     setError('');
     try {
       const result = await launchImageLibrary({mediaType: 'photo', selectionLimit: 1});
       if (result.didCancel || !result.assets?.length) return;
-      setPhotoUri(result.assets[0].uri);
+      setter(result.assets[0].uri);
     } catch (_) {
       setError('Could not open gallery');
     }
   };
 
-  // Save measurement — creates a real session, saves before/photo/after,
-  // then links it onto the scanned SeedPacket. Any failure is surfaced as a
-  // real error; nothing is written locally to fake a successful save.
-  const handleSave = async () => {
+  // Step 2 → 3: create the session (first time only) and save the before
+  // weight. Any failure keeps the user on this step with a real error —
+  // except a genuine "already filled" race, which safely exits the flow
+  // instead of leaving the user stuck retrying a request that can never
+  // succeed.
+  const handleBeforeWeightNext = async () => {
     const before = parseFloat(beforeWeightVal);
-    const after  = parseFloat(afterWeightVal);
+    if (!before || before <= 0) { setError('Enter a valid before weight'); return; }
+    if (creatingSessionRef.current) return;
+    setSaving(true); setError('');
+    try {
+      let sid = sessionId;
+      if (!sid) {
+        creatingSessionRef.current = true;
+        sid = await createWeighSession(token, packet?.uniqueId);
+        setSessionId(sid);
+      }
+      await saveBeforeWeight(sid, before);
+      setStep(3);
+    } catch (err) {
+      if (err.code === 'PACKET_ALREADY_FILLED') {
+        // The backend already re-looked-up the packet for this 409 — use
+        // that fresh, server-confirmed copy rather than the stale one from
+        // this screen's original (now out-of-date) scan.
+        handleAlreadyFilled(err.packet || packet);
+        return;
+      }
+      setError(err.message || 'Could not save before weight — please try again');
+    } finally {
+      setSaving(false);
+      creatingSessionRef.current = false;
+    }
+  };
+
+  // Step 3 → 4: upload the before photo to Cloudinary via the backend.
+  // A failed upload is a real error — nothing is saved locally to fake it.
+  const handleBeforePhotoContinue = async () => {
+    if (!beforePhotoUri) { setStep(4); return; }
+    setSaving(true); setError('');
+    try {
+      await uploadSessionPhoto(sessionId, beforePhotoUri, {uniqueId: packet.uniqueId, phase: 'before'});
+      setStep(4);
+    } catch (err) {
+      setError(err.message || 'Before photo upload failed — please try again');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Step 4 → 5: save the after weight (difference is computed server-side).
+  const handleAfterWeightNext = async () => {
+    const after = parseFloat(afterWeightVal);
     if (!after || after <= 0) { setError('Enter a valid after weight'); return; }
     setSaving(true); setError('');
     try {
-      const sessionId = await createWeighSession(token);
-      if (photoUri) await uploadSessionPhoto(sessionId, photoUri);
-      await saveBeforeWeight(sessionId, before);
       await saveAfterWeight(sessionId, after);
+      setStep(5);
+    } catch (err) {
+      setError(err.message || 'Could not save after weight — please try again');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Step 5 → 6: upload the after photo, then link the session onto the
+  // scanned SeedPacket. Any failure is surfaced as a real error; nothing is
+  // written locally to fake a successful save, and retrying just re-runs
+  // whichever part(s) below haven't succeeded yet.
+  const handleFinalSave = async () => {
+    setSaving(true); setError('');
+    try {
+      if (afterPhotoUri) {
+        await uploadSessionPhoto(sessionId, afterPhotoUri, {uniqueId: packet.uniqueId, phase: 'after'});
+      }
       const saved = await linkSessionToPacket(sessionId, packet.uniqueId);
       setLinkedPacket(saved);
 
+      const before = parseFloat(beforeWeightVal);
+      const after  = parseFloat(afterWeightVal);
       const diff = saved.difference != null ? saved.difference : (after - before);
       dispatch(addNotification({
         type: 'PASS',
         title: `Measurement Saved — ${packet?.batchId?.seedType || packet?.uniqueId}`,
         body: `Before ${before.toFixed(2)} kg · After ${after.toFixed(2)} kg · Diff ${diff >= 0 ? '+' : ''}${diff.toFixed(2)} kg`,
       }));
-      setStep(5);
+      setStep(6);
     } catch (err) {
+      if (err.code === 'PACKET_ALREADY_FILLED') {
+        // Another session won the race and linked first. The link endpoint's
+        // 409 doesn't carry a packet payload, so re-fetch the real current
+        // state before showing it — this screen's local packet/weight state
+        // belongs to the losing attempt and must not be shown as if saved.
+        try {
+          const fresh = await fetchProductByScan(packet.uniqueId);
+          handleAlreadyFilled(fresh);
+        } catch (_) {
+          handleAlreadyFilled(packet);
+        }
+        return;
+      }
       setError(err.message || 'Save failed — please try again');
     } finally {
       setSaving(false);
@@ -310,18 +484,22 @@ export default function WeighScanScreen() {
           {!!error && <Text style={styles.errTxt}>{error}</Text>}
 
           <Pressable
-            style={[styles.nextBtn, !beforeWeightVal && styles.nextBtnDisabled]}
-            disabled={!beforeWeightVal}
-            onPress={() => { setError(''); setStep(3); }}>
-            <Text style={styles.nextBtnTxt}>Next — Take Photo</Text>
-            <Icon name="arrow-forward" size={18} color="#fff" />
+            style={[styles.nextBtn, (!beforeWeightVal || saving) && styles.nextBtnDisabled]}
+            disabled={!beforeWeightVal || saving}
+            onPress={handleBeforeWeightNext}>
+            {saving
+              ? <ActivityIndicator color="#fff" />
+              : <>
+                  <Text style={styles.nextBtnTxt}>Next — Before Photo</Text>
+                  <Icon name="arrow-forward" size={18} color="#fff" />
+                </>}
           </Pressable>
         </ScrollView>
       </View>
     );
   }
 
-  // ── STEP 3: PHOTO ────────────────────────────────
+  // ── STEP 3: BEFORE PHOTO ─────────────────────────
   if (step === 3) {
     return (
       <View style={styles.root}>
@@ -344,18 +522,18 @@ export default function WeighScanScreen() {
             </View>
           </View>
 
-          <Text style={styles.stepTitle}>Step 3 — Take Product Photo</Text>
-          <Text style={styles.stepSub}>Take a photo of the filled product</Text>
+          <Text style={styles.stepTitle}>Step 3 — Before Photo</Text>
+          <Text style={styles.stepSub}>Take a photo of the empty packet before filling</Text>
 
-          {photoUri ? (
+          {beforePhotoUri ? (
             <View>
-              <Image source={{uri: photoUri}} style={styles.photoPreview} resizeMode="cover" />
+              <Image source={{uri: beforePhotoUri}} style={styles.photoPreview} resizeMode="cover" />
               <View style={styles.retakeRow}>
-                <Pressable style={styles.retakeBtn} onPress={handleTakePhoto}>
+                <Pressable style={styles.retakeBtn} onPress={() => handleTakePhoto(setBeforePhotoUri)}>
                   <Icon name="refresh" size={16} color={COLORS.primary} />
                   <Text style={styles.retakeTxt}>Retake</Text>
                 </Pressable>
-                <Pressable style={styles.retakeBtn} onPress={handlePickPhoto}>
+                <Pressable style={styles.retakeBtn} onPress={() => handlePickPhoto(setBeforePhotoUri)}>
                   <Icon name="photo-library" size={16} color={COLORS.primary} />
                   <Text style={styles.retakeTxt}>Gallery</Text>
                 </Pressable>
@@ -363,12 +541,12 @@ export default function WeighScanScreen() {
             </View>
           ) : (
             <View style={styles.photoBox}>
-              <Pressable style={styles.photoActionBtn} onPress={handleTakePhoto}>
+              <Pressable style={styles.photoActionBtn} onPress={() => handleTakePhoto(setBeforePhotoUri)}>
                 <Icon name="add-a-photo" size={28} color={COLORS.primary} />
                 <Text style={styles.photoBoxTxt}>Camera</Text>
               </Pressable>
               <View style={styles.photoDivider} />
-              <Pressable style={styles.photoActionBtn} onPress={handlePickPhoto}>
+              <Pressable style={styles.photoActionBtn} onPress={() => handlePickPhoto(setBeforePhotoUri)}>
                 <Icon name="photo-library" size={28} color={COLORS.primary} />
                 <Text style={styles.photoBoxTxt}>Gallery</Text>
               </Pressable>
@@ -378,22 +556,26 @@ export default function WeighScanScreen() {
           {!!error && <Text style={styles.errTxt}>{error}</Text>}
 
           <Pressable
-            style={[styles.nextBtn, !photoUri && styles.nextBtnDisabled]}
-            disabled={!photoUri}
-            onPress={() => setStep(4)}>
-            <Text style={styles.nextBtnTxt}>Next — After Weight</Text>
-            <Icon name="arrow-forward" size={18} color="#fff" />
+            style={[styles.nextBtn, (!beforePhotoUri || saving) && styles.nextBtnDisabled]}
+            disabled={!beforePhotoUri || saving}
+            onPress={handleBeforePhotoContinue}>
+            {saving
+              ? <ActivityIndicator color="#fff" />
+              : <>
+                  <Text style={styles.nextBtnTxt}>Continue — After Weight</Text>
+                  <Icon name="arrow-forward" size={18} color="#fff" />
+                </>}
           </Pressable>
 
-          <Pressable style={styles.skipLink} onPress={() => setStep(4)}>
-            <Text style={styles.skipTxt}>Skip photo (optional)</Text>
+          <Pressable style={styles.skipLink} onPress={() => setStep(4)} disabled={saving}>
+            <Text style={styles.skipTxt}>Skip before photo (optional)</Text>
           </Pressable>
         </ScrollView>
       </View>
     );
   }
 
-  // ── STEP 4: AFTER WEIGHT + DIFFERENCE + SAVE ─────
+  // ── STEP 4: AFTER WEIGHT ─────────────────────────
   if (step === 4) {
     const b = parseFloat(beforeWeightVal);
     const a = parseFloat(afterWeightVal);
@@ -418,8 +600,8 @@ export default function WeighScanScreen() {
               <Text style={styles.productName}>{packet?.batchId?.seedType || 'Seed Packet'}</Text>
               <Text style={styles.productMeta}>ID: {packet?.uniqueId} · Before: {(b || 0).toFixed(2)} kg</Text>
             </View>
-            {photoUri && (
-              <Image source={{uri: photoUri}} style={styles.thumbSmall} resizeMode="cover" />
+            {(beforePhotoUri || resumedBeforePhotoUrl) && (
+              <Image source={{uri: beforePhotoUri || resolvePhotoUri(resumedBeforePhotoUrl)}} style={styles.thumbSmall} resizeMode="cover" />
             )}
           </View>
 
@@ -453,12 +635,12 @@ export default function WeighScanScreen() {
           <Pressable
             style={[styles.nextBtn, (!afterWeightVal || saving) && styles.nextBtnDisabled]}
             disabled={!afterWeightVal || saving}
-            onPress={handleSave}>
+            onPress={handleAfterWeightNext}>
             {saving
               ? <ActivityIndicator color="#fff" />
               : <>
-                  <Text style={styles.nextBtnTxt}>Save Measurement</Text>
-                  <Icon name="save" size={18} color="#fff" />
+                  <Text style={styles.nextBtnTxt}>Next — After Photo</Text>
+                  <Icon name="arrow-forward" size={18} color="#fff" />
                 </>}
           </Pressable>
         </ScrollView>
@@ -466,10 +648,94 @@ export default function WeighScanScreen() {
     );
   }
 
-  // ── STEP 5: DONE ─────────────────────────────────
+  // ── STEP 5: AFTER PHOTO + SAVE ───────────────────
+  if (step === 5) {
+    return (
+      <View style={styles.root}>
+        <View style={styles.header}>
+          <Pressable style={styles.backBtn} onPress={() => setStep(4)}>
+            <Icon name="arrow-back" size={20} color={COLORS.text} />
+          </Pressable>
+          <Text style={styles.headerTitle}>Weigh & Record</Text>
+          <View style={{width: 40}} />
+        </View>
+        {stepBar}
+        <ScrollView contentContainerStyle={styles.scroll}>
+          <View style={styles.productCard}>
+            <View style={styles.productIconWrap}>
+              <Icon name="check-circle" size={22} color={COLORS.success} />
+            </View>
+            <View style={{flex: 1}}>
+              <Text style={styles.productName}>{packet?.batchId?.seedType || 'Seed Packet'}</Text>
+              <Text style={styles.productMeta}>After: {parseFloat(afterWeightVal || 0).toFixed(2)} kg</Text>
+            </View>
+          </View>
+
+          <Text style={styles.stepTitle}>Step 5 — After Photo</Text>
+          <Text style={styles.stepSub}>Take a photo of the filled product</Text>
+
+          {(afterPhotoUri || resumedAfterPhotoUrl) ? (
+            <View>
+              <Image source={{uri: afterPhotoUri || resolvePhotoUri(resumedAfterPhotoUrl)}} style={styles.photoPreview} resizeMode="cover" />
+              <View style={styles.retakeRow}>
+                <Pressable style={styles.retakeBtn} onPress={() => handleTakePhoto(setAfterPhotoUri)}>
+                  <Icon name="refresh" size={16} color={COLORS.primary} />
+                  <Text style={styles.retakeTxt}>Retake</Text>
+                </Pressable>
+                <Pressable style={styles.retakeBtn} onPress={() => handlePickPhoto(setAfterPhotoUri)}>
+                  <Icon name="photo-library" size={16} color={COLORS.primary} />
+                  <Text style={styles.retakeTxt}>Gallery</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : (
+            <View style={styles.photoBox}>
+              <Pressable style={styles.photoActionBtn} onPress={() => handleTakePhoto(setAfterPhotoUri)}>
+                <Icon name="add-a-photo" size={28} color={COLORS.primary} />
+                <Text style={styles.photoBoxTxt}>Camera</Text>
+              </Pressable>
+              <View style={styles.photoDivider} />
+              <Pressable style={styles.photoActionBtn} onPress={() => handlePickPhoto(setAfterPhotoUri)}>
+                <Icon name="photo-library" size={28} color={COLORS.primary} />
+                <Text style={styles.photoBoxTxt}>Gallery</Text>
+              </Pressable>
+            </View>
+          )}
+
+          {!!error && <Text style={styles.errTxt}>{error}</Text>}
+
+          <Pressable
+            style={[styles.nextBtn, saving && styles.nextBtnDisabled]}
+            disabled={saving}
+            onPress={handleFinalSave}>
+            {saving
+              ? <ActivityIndicator color="#fff" />
+              : <>
+                  <Text style={styles.nextBtnTxt}>Save Measurement</Text>
+                  <Icon name="save" size={18} color="#fff" />
+                </>}
+          </Pressable>
+
+          {!afterPhotoUri && !resumedAfterPhotoUrl && (
+            <Pressable style={styles.skipLink} onPress={handleFinalSave} disabled={saving}>
+              <Text style={styles.skipTxt}>Skip after photo (optional)</Text>
+            </Pressable>
+          )}
+        </ScrollView>
+      </View>
+    );
+  }
+
+  // ── STEP 6: DONE ─────────────────────────────────
   const finalDiff = linkedPacket?.difference != null
     ? linkedPacket.difference
     : (parseFloat(afterWeightVal || 0) - parseFloat(beforeWeightVal || 0));
+  // linkedPacket mirrors the session's photo URLs, so it covers the resumed
+  // case too (where the photo was uploaded in an earlier app visit and no
+  // local file URI exists any more).
+  const doneBeforePhotoUri = beforePhotoUri || resolvePhotoUri(linkedPacket?.beforePhotoUrl);
+  const doneAfterPhotoUri  = afterPhotoUri  || resolvePhotoUri(linkedPacket?.afterPhotoUrl);
+  const donePhotoUri = doneAfterPhotoUri || doneBeforePhotoUri;
 
   return (
     <View style={styles.root}>
@@ -480,8 +746,8 @@ export default function WeighScanScreen() {
         <Text style={styles.doneTxt}>Measurement Saved!</Text>
         <Text style={styles.doneSub}>Saved to the server and linked to this packet</Text>
 
-        {photoUri && (
-          <Image source={{uri: photoUri}} style={styles.donePhoto} resizeMode="cover" />
+        {donePhotoUri && (
+          <Image source={{uri: donePhotoUri}} style={styles.donePhoto} resizeMode="cover" />
         )}
 
         <View style={styles.doneCard}>
@@ -490,7 +756,8 @@ export default function WeighScanScreen() {
           <DoneRow label="Before"    value={`${parseFloat(beforeWeightVal || 0).toFixed(2)} kg`} />
           <DoneRow label="After"     value={`${parseFloat(afterWeightVal || 0).toFixed(2)} kg`} />
           <DoneRow label="Difference" value={`${finalDiff >= 0 ? '+' : ''}${finalDiff.toFixed(2)} kg`} bold color={COLORS.primary} />
-          <DoneRow label="Photo"     value={photoUri ? 'Saved & linked ✓' : 'Skipped'} />
+          <DoneRow label="Before Photo" value={doneBeforePhotoUri ? 'Saved & linked ✓' : 'Skipped'} />
+          <DoneRow label="After Photo"  value={doneAfterPhotoUri ? 'Saved & linked ✓' : 'Skipped'} />
           <DoneRow label="Time"      value={new Date().toLocaleTimeString()} />
         </View>
 

@@ -41,6 +41,15 @@ function getTheme(seedType) {
 }
 
 // Unique decorative circles per packet (based on uniqueId char codes)
+// Cloudinary secure_urls are already absolute (https://...); only the old
+// local-disk photoUrl ("/uploads/session-photos/...") needs BASE_URL
+// prepended. Prefixing BASE_URL onto an already-absolute URL produced a
+// broken concatenated string, which is why saved photos failed to render.
+function resolvePhotoUri(url) {
+  if (!url) return null;
+  return /^https?:\/\//i.test(url) ? url : `${BASE_URL}${url}`;
+}
+
 function getBubbles(uniqueId = '') {
   const seed = uniqueId.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
   return [
@@ -54,7 +63,7 @@ function getBubbles(uniqueId = '') {
 function PacketBanner({packet, batch, onBack}) {
   const theme    = getTheme(batch?.seedType);
   const bubbles  = getBubbles(packet.uniqueId);
-  const photoUri = packet.photoUrl ? `${BASE_URL}${packet.photoUrl}` : null;
+  const photoUri = resolvePhotoUri(packet.afterPhotoUrl || packet.beforePhotoUrl || packet.photoUrl);
 
   return (
     <View style={styles.imageBanner}>
@@ -118,16 +127,22 @@ export default function ProductDetailScreen() {
     : '—';
 
   // Only fields that actually exist on SeedBatch/SeedPacket are shown here —
-  // there is no Warehouse/Rack/Shelf/Year/Month field in the current schema,
-  // so those are intentionally not displayed rather than shown as fake data.
+  // Warehouse/Rack/Shelf come straight from the same populated `batchId`
+  // GET /api/packets/:uniqueId already returns (packetRoutes.js selects
+  // 'warehouse rack shelf' in its populate). They're optional on SeedBatch,
+  // so an empty/missing value shows '—' rather than being left off or faked.
   const infoCards = [
     {icon: 'qr-code',        label: 'Packet ID',     value: packet.uniqueId},
     {icon: 'inventory-2',    label: 'Batch Number',  value: batch?.batchNumber || '—'},
     {icon: 'local-florist',  label: 'Seed Type',     value: batch?.seedType || '—'},
     {icon: 'calendar-today', label: 'Batch Created', value: batchCreated},
+    {icon: 'store',          label: 'Warehouse',     value: batch?.warehouse || '—'},
+    {icon: 'view-module',    label: 'Rack',          value: batch?.rack || '—'},
+    {icon: 'layers',         label: 'Shelf',         value: batch?.shelf || '—'},
   ];
 
-  const photoUri = packet.photoUrl ? `${BASE_URL}${packet.photoUrl}` : null;
+  const beforePhotoUri = resolvePhotoUri(packet.beforePhotoUrl);
+  const afterPhotoUri  = resolvePhotoUri(packet.afterPhotoUrl);
   const diff = packet.difference;
 
   return (
@@ -178,10 +193,23 @@ export default function ProductDetailScreen() {
                 <Text style={styles.weightLbl}>Diff (kg)</Text>
               </View>
             </View>
-            {photoUri && (
-              <Image source={{uri: photoUri}} style={styles.recordPhoto} resizeMode="cover" />
+            {(beforePhotoUri || afterPhotoUri) && (
+              <View style={styles.photoPairRow}>
+                {beforePhotoUri && (
+                  <View style={styles.photoPairItem}>
+                    <Image source={{uri: beforePhotoUri}} style={styles.recordPhotoHalf} resizeMode="cover" />
+                    <Text style={styles.photoPairLbl}>Before</Text>
+                  </View>
+                )}
+                {afterPhotoUri && (
+                  <View style={styles.photoPairItem}>
+                    <Image source={{uri: afterPhotoUri}} style={styles.recordPhotoHalf} resizeMode="cover" />
+                    <Text style={styles.photoPairLbl}>After</Text>
+                  </View>
+                )}
+              </View>
             )}
-            <View style={{paddingHorizontal: SPACING.md, paddingBottom: SPACING.md, paddingTop: photoUri ? SPACING.sm : 0}}>
+            <View style={{paddingHorizontal: SPACING.md, paddingBottom: SPACING.md, paddingTop: (beforePhotoUri || afterPhotoUri) ? SPACING.sm : 0}}>
               <Text style={styles.weightLbl}>
                 Weighed {packet.afterTime ? new Date(packet.afterTime).toLocaleString('en-US', {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'}) : '—'}
               </Text>
@@ -258,6 +286,15 @@ const styles = StyleSheet.create({
   viewHistoryBtn: {flexDirection: 'row', alignItems: 'center', paddingRight: SPACING.md, gap: 2},
   viewHistoryTxt: {fontSize: 12, fontWeight: '700', color: COLORS.primary},
   recordPhoto:   {width: '100%', height: 200},
+  photoPairRow:  {flexDirection: 'row', gap: 1},
+  photoPairItem: {flex: 1, position: 'relative'},
+  recordPhotoHalf: {width: '100%', height: 160},
+  photoPairLbl:  {
+    position: 'absolute', bottom: 6, left: 6,
+    color: '#fff', fontSize: 11, fontWeight: '700',
+    backgroundColor: 'rgba(0,0,0,0.45)', borderRadius: 4,
+    paddingHorizontal: 6, paddingVertical: 2,
+  },
   weightRow:     {flexDirection: 'row'},
   weightBox:     {flex: 1, alignItems: 'center', padding: SPACING.md, gap: 4, borderRightWidth: 1, borderRightColor: COLORS.border},
   weightVal:     {fontSize: 18, fontWeight: '800', color: COLORS.text},

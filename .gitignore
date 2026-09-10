@@ -64,10 +64,12 @@ desktop.ini
 server/uploads/products/*
 server/uploads/qr/*
 server/uploads/weigh-photos/*
+server/uploads/session-photos/*
 # Keep the empty folder structure
 !server/uploads/products/.gitkeep
 !server/uploads/qr/.gitkeep
 !server/uploads/weigh-photos/.gitkeep
+!server/uploads/session-photos/.gitkeep
 
 # ─── Misc Dev Artefacts ─────────────────────────────────────────────────────
 screen*.png

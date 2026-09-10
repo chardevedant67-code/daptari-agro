@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import {
   Box, Button, Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, Typography, Chip, IconButton, Tooltip, CircularProgress,
-  Grid, InputAdornment, LinearProgress, Avatar,
+  Grid, InputAdornment, LinearProgress, Avatar, Alert,
+  Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import QrCode2Icon from '@mui/icons-material/QrCode2';
@@ -12,20 +13,22 @@ import CloseIcon from '@mui/icons-material/Close';
 import InventoryIcon from '@mui/icons-material/Inventory';
 import AllInboxIcon from '@mui/icons-material/AllInbox';
 import TaskAltIcon from '@mui/icons-material/TaskAlt';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import SearchIcon from '@mui/icons-material/Search';
+import ImageIcon from '@mui/icons-material/Image';
 import Layout from '../components/Layout';
 import PageHeader from '../components/PageHeader';
+import NewBatchDialog from '../components/NewBatchDialog';
 import { batchAPI } from '../services/api';
 
-const SEED_PRESETS = [
-  { label: 'Soyabean',  code: 'SO' },
-  { label: 'Wheat',     code: 'WH' },
-  { label: 'Rice',      code: 'RI' },
-  { label: 'Maize',     code: 'MA' },
-  { label: 'Cotton',    code: 'CO' },
-  { label: 'Mustard',   code: 'MU' },
-  { label: 'Groundnut', code: 'GN' },
-  { label: 'Sunflower', code: 'SF' },
-];
+// Same hardcoded API host already used elsewhere in this app for resolving
+// relative/local paths — a real Cloudinary URL is already absolute and must
+// be used as-is (Step 14 rule: never prefix an absolute URL).
+const resolvePhotoUrl = (url) => {
+  if (!url) return null;
+  if (/^https?:\/\//i.test(url)) return url;
+  return `${batchAPI.qrBaseUrl()}${url}`;
+};
 
 const GRADIENTS = [
   'linear-gradient(135deg,#1a227f,#3d47a3)',
@@ -42,15 +45,20 @@ export default function Batches() {
   const [batches, setBatches]         = useState([]);
   const [loading, setLoading]         = useState(true);
   const [createOpen, setCreateOpen]   = useState(false);
-  const [creating,   setCreating]     = useState(false);
-  const [createError,setCreateError]  = useState('');
   // QR drawer state
   const [qrBatch,    setQrBatch]    = useState(null);
   const [packets,    setPackets]    = useState([]);
   const [qrLoading,  setQrLoading]  = useState(false);
   const [dlLoading,  setDlLoading]  = useState({}); // batchId → true/false
 
-  const [form, setForm] = useState({ seedType:'', seedCode:'', batchNumber:'', batchCode:'', count:'' });
+  // Batch detail dialog state (Step 14) — real SeedBatch + real SeedPacket
+  // data from the existing GET /api/batches/:id endpoint.
+  const [detailBatch,   setDetailBatch]   = useState(null);
+  const [detailPackets, setDetailPackets] = useState([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError,   setDetailError]   = useState('');
+  const [packetSearch,  setPacketSearch]  = useState('');
+  const [viewPhoto,     setViewPhoto]     = useState(null); // { url, label } | null
 
   useEffect(() => { fetchBatches(); }, []);
 
@@ -63,49 +71,6 @@ export default function Batches() {
     finally { setLoading(false); }
   };
 
-  const handlePreset = (p) => setForm(f => ({ ...f, seedType: p.label, seedCode: p.code }));
-
-  const handleChange = (e) => {
-    const { name, value } = e.target;
-    setForm(f => {
-      const upd = { ...f, [name]: value };
-      if (name === 'batchNumber') upd.batchCode = value.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-      if (name === 'seedType')    upd.seedCode  = value.replace(/[^A-Za-z]/g, '').slice(0, 2).toUpperCase();
-      return upd;
-    });
-  };
-
-  const handleCreate = async () => {
-    setCreateError('');
-    const missing = [];
-    if (!form.seedType)    missing.push('Seed Type');
-    if (!form.seedCode)    missing.push('Seed Code');
-    if (!form.batchNumber) missing.push('Batch Number');
-    if (!form.batchCode)   missing.push('Batch Code');
-    if (!form.count)       missing.push('Count');
-    if (missing.length > 0) { setCreateError(`Fill: ${missing.join(', ')}`); return; }
-    try {
-      setCreating(true);
-      const res = await batchAPI.create({
-        batchName:   `${form.seedType} ${form.batchNumber}`,
-        seedType:    form.seedType,
-        seedCode:    form.seedCode,
-        batchNumber: form.batchNumber,
-        batchCode:   form.batchCode,
-        count:       parseInt(form.count),
-      });
-      if (!res.data.success) throw new Error(res.data.message);
-      setCreateOpen(false);
-      setCreateError('');
-      setForm({ seedType:'', seedCode:'', batchNumber:'', batchCode:'', count:'' });
-      fetchBatches();
-    } catch (err) {
-      setCreateError(err.response?.data?.message || err.message || 'Error creating batch');
-    } finally {
-      setCreating(false);
-    }
-  };
-
   const openQRDrawer = async (batch) => {
     setQrBatch(batch);
     setPackets([]);
@@ -115,6 +80,26 @@ export default function Batches() {
       setPackets(data.packets || []);
     } catch { /* silent */ }
     finally { setQrLoading(false); }
+  };
+
+  // Batch Details dialog — real SeedBatch fields + full real SeedPacket list
+  // (status, weights, difference, photos, operator, deviceId) via the
+  // existing GET /api/batches/:id endpoint. Read-only: never edits a packet.
+  const openDetailDialog = async (batch) => {
+    setDetailBatch(batch);
+    setDetailPackets([]);
+    setDetailError('');
+    setPacketSearch('');
+    setDetailLoading(true);
+    try {
+      const { data } = await batchAPI.getOne(batch._id);
+      setDetailBatch(data.batch);
+      setDetailPackets(data.packets || []);
+    } catch (err) {
+      setDetailError(err.response?.data?.message || 'Could not load batch details');
+    } finally {
+      setDetailLoading(false);
+    }
   };
 
   const downloadQR = (qrUrl, name) => {
@@ -142,10 +127,6 @@ export default function Batches() {
   // Aggregate stats
   const totalQRs    = batches.reduce((s, b) => s + b.count, 0);
   const totalFilled = batches.reduce((s, b) => s + (b.filledCount || 0), 0);
-
-  const previewId = form.seedCode && form.batchCode && form.count
-    ? `PRD-${form.seedCode}${form.batchCode}-001  →  PRD-${form.seedCode}${form.batchCode}-${String(form.count).padStart(3,'0')}`
-    : null;
 
   return (
     <Layout>
@@ -285,6 +266,15 @@ export default function Batches() {
 
                   {/* Buttons */}
                   <Box sx={{ display: 'flex', gap: 1, flexShrink: 0 }}>
+                    <Button variant="outlined" startIcon={<InfoOutlinedIcon />}
+                      onClick={() => openDetailDialog(b)}
+                      sx={{
+                        borderRadius: 2, fontWeight: 700, fontSize: 12, whiteSpace: 'nowrap',
+                        borderColor: '#e2e8f0', color: '#1a227f', px: 2,
+                        '&:hover': { borderColor: '#1a227f', background: 'rgba(26,34,127,0.04)' },
+                      }}>
+                      Details
+                    </Button>
                     <Button variant="outlined" startIcon={<QrCode2Icon />}
                       onClick={() => openQRDrawer(b)}
                       sx={{
@@ -401,79 +391,143 @@ export default function Batches() {
         )}
       </Dialog>
 
-      {/* ── Create Batch Dialog ── */}
-      <Dialog open={createOpen} onClose={() => { setCreateOpen(false); setCreateError(''); }} maxWidth="sm" fullWidth
-        PaperProps={{ sx: { borderRadius: 3 } }}>
-        <DialogTitle sx={{ fontWeight: 800, fontSize: 18 }}>Create New Batch</DialogTitle>
-        <DialogContent sx={{ pt: 1 }}>
-          <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', mb: 1, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-            Quick Select
-          </Typography>
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.7, mb: 2.5 }}>
-            {SEED_PRESETS.map(p => (
-              <Chip key={p.code} label={`${p.label} (${p.code})`} size="small" clickable
-                onClick={() => handlePreset(p)}
-                sx={{
-                  fontWeight: 600, fontSize: 11,
-                  background: form.seedCode === p.code ? 'rgba(26,34,127,0.12)' : '#f1f5f9',
-                  color:      form.seedCode === p.code ? '#1a227f' : '#475569',
-                  border:     form.seedCode === p.code ? '1px solid #1a227f' : '1px solid transparent',
-                }}
-              />
-            ))}
-          </Box>
+      {/* ── Batch Detail Dialog (Step 14) — real SeedBatch + SeedPacket data ── */}
+      <Dialog open={!!detailBatch} onClose={() => setDetailBatch(null)} maxWidth="lg" fullWidth
+        PaperProps={{ sx: { borderRadius: 3, maxHeight: '90vh' } }}>
+        {detailBatch && (
+          <>
+            <DialogTitle sx={{ p: 0 }}>
+              <Box sx={{
+                background: GRADIENTS[batches.findIndex(b => b._id === detailBatch._id) % GRADIENTS.length] || GRADIENTS[0],
+                p: 2.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              }}>
+                <Box>
+                  <Typography sx={{ fontSize: 18, fontWeight: 800, color: '#fff' }}>{detailBatch.batchName}</Typography>
+                  <Typography sx={{ fontSize: 12, color: 'rgba(255,255,255,0.75)', fontFamily: 'monospace' }}>
+                    {detailBatch.batchNumber}
+                  </Typography>
+                </Box>
+                <IconButton onClick={() => setDetailBatch(null)} sx={{ color: '#fff' }}>
+                  <CloseIcon />
+                </IconButton>
+              </Box>
+            </DialogTitle>
 
-          <Grid container spacing={2}>
-            <Grid item xs={8}>
-              <TextField fullWidth label="Seed Type" name="seedType" value={form.seedType}
-                onChange={handleChange} size="small" placeholder="e.g. Soyabean" />
-            </Grid>
-            <Grid item xs={4}>
-              <TextField fullWidth label="Seed Code" name="seedCode" value={form.seedCode}
-                onChange={handleChange} size="small"
-                inputProps={{ maxLength: 4, style: { textTransform: 'uppercase', fontFamily: 'monospace', fontWeight: 700 } }}
-                helperText="Auto-derived" />
-            </Grid>
-            <Grid item xs={6}>
-              <TextField fullWidth label="Batch Number" name="batchNumber" value={form.batchNumber}
-                onChange={handleChange} size="small" placeholder="e.g. BA-09" />
-            </Grid>
-            <Grid item xs={6}>
-              <TextField fullWidth label="Batch Code" name="batchCode" value={form.batchCode}
-                onChange={handleChange} size="small"
-                inputProps={{ style: { textTransform: 'uppercase', fontFamily: 'monospace', fontWeight: 700 } }}
-                helperText="Auto-derived" />
-            </Grid>
-            <Grid item xs={12}>
-              <TextField fullWidth label="Count — Number of QR Codes" name="count" value={form.count}
-                onChange={handleChange} size="small" type="number"
-                InputProps={{ endAdornment: <InputAdornment position="end">QR codes</InputAdornment> }}
-                inputProps={{ min: 1, max: 5000 }} />
-            </Grid>
-          </Grid>
+            <DialogContent sx={{ p: 2.5 }}>
+              {detailError && <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>{detailError}</Alert>}
 
-          {previewId && (
-            <Box sx={{ mt: 2, p: 1.5, background: '#f0f4ff', borderRadius: 2, border: '1px solid #c7d2fe' }}>
-              <Typography sx={{ fontSize: 10, fontWeight: 700, color: '#1a227f', mb: 0.5, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Preview</Typography>
-              <Typography sx={{ fontFamily: 'monospace', fontSize: 12, color: '#3d47a3', fontWeight: 700 }}>{previewId}</Typography>
-              <Typography sx={{ fontSize: 11, color: '#64748b', mt: 0.3 }}>{form.count} unique QR codes will be generated</Typography>
-            </Box>
-          )}
-          {createError && (
-            <Box sx={{ mt: 2, p: 1.5, background: '#fef2f2', borderRadius: 2, border: '1px solid #fecaca' }}>
-              <Typography sx={{ fontSize: 13, color: '#dc2626', fontWeight: 600 }}>⚠ {createError}</Typography>
-            </Box>
+              {detailLoading ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
+                  <CircularProgress />
+                </Box>
+              ) : (
+                <>
+                  {/* Real batch summary — all from the real SeedBatch document */}
+                  <Grid container spacing={1.2} sx={{ mb: 2.5 }}>
+                    {[
+                      ['Seed Type', detailBatch.seedType || '—'],
+                      ['Total Packets', detailPackets.length],
+                      ['Filled', detailPackets.filter(p => p.status === 'filled').length],
+                      ['Pending', detailPackets.filter(p => p.status === 'empty').length],
+                      ['Month', detailBatch.month ?? '—'],
+                      ['Year', detailBatch.year ?? '—'],
+                      ['Warehouse', detailBatch.warehouse || '—'],
+                      ['Rack', detailBatch.rack || '—'],
+                      ['Shelf', detailBatch.shelf || '—'],
+                      ['Created', detailBatch.createdAt ? new Date(detailBatch.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'],
+                    ].map(([label, value]) => (
+                      <Grid item xs={6} sm={4} md={2.4} key={label}>
+                        <Box sx={{ background: '#f8fafc', borderRadius: 2, p: 1.2, textAlign: 'center', border: '1px solid #f1f5f9' }}>
+                          <Typography sx={{ fontSize: 14, fontWeight: 800, color: '#0f172a' }}>{value}</Typography>
+                          <Typography sx={{ fontSize: 9, color: '#64748b', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{label}</Typography>
+                        </Box>
+                      </Grid>
+                    ))}
+                  </Grid>
+
+                  <TextField
+                    size="small" fullWidth placeholder="Search Packet ID…"
+                    value={packetSearch} onChange={e => setPacketSearch(e.target.value)}
+                    InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" sx={{ color: '#94a3b8' }} /></InputAdornment> }}
+                    sx={{ mb: 2, '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+                  />
+
+                  <TableContainer sx={{ maxHeight: 420, overflowY: 'auto', border: '1px solid #f1f5f9', borderRadius: 2 }}>
+                    <Table stickyHeader size="small">
+                      <TableHead>
+                        <TableRow>
+                          {['Packet ID', 'Status', 'Before', 'After', 'Difference', 'Before Photo', 'After Photo', 'Operator', 'Device ID', 'Weighed'].map(h => <TableCell key={h}>{h}</TableCell>)}
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {detailPackets.filter(p => !packetSearch || p.uniqueId.toLowerCase().includes(packetSearch.toLowerCase())).length === 0 ? (
+                          <TableRow><TableCell colSpan={10} align="center" sx={{ py: 3, color: '#94a3b8' }}>
+                            {detailPackets.length === 0 ? 'This batch has no packets' : 'No packets match your search'}
+                          </TableCell></TableRow>
+                        ) : detailPackets
+                            .filter(p => !packetSearch || p.uniqueId.toLowerCase().includes(packetSearch.toLowerCase()))
+                            .map(p => {
+                              const beforeUrl = resolvePhotoUrl(p.beforePhotoUrl);
+                              const afterUrl  = resolvePhotoUrl(p.afterPhotoUrl);
+                              return (
+                                <TableRow key={p.uniqueId} hover>
+                                  <TableCell sx={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 700, color: '#1a227f' }}>{p.uniqueId}</TableCell>
+                                  <TableCell>
+                                    <Chip label={p.status === 'filled' ? 'Filled' : 'Empty'} size="small"
+                                      sx={{ fontSize: 10, fontWeight: 800, background: p.status === 'filled' ? '#f0fdf4' : '#f8fafc', color: p.status === 'filled' ? '#15803d' : '#64748b' }} />
+                                  </TableCell>
+                                  <TableCell sx={{ fontSize: 12, fontWeight: 700 }}>{p.beforeWeight != null ? `${p.beforeWeight} kg` : '—'}</TableCell>
+                                  <TableCell sx={{ fontSize: 12, fontWeight: 700 }}>{p.afterWeight != null ? `${p.afterWeight} kg` : '—'}</TableCell>
+                                  <TableCell sx={{ fontSize: 12, fontWeight: 800, color: p.difference != null && p.difference < 0 ? '#dc2626' : '#0f172a' }}>
+                                    {p.difference != null ? `${p.difference} kg` : '—'}
+                                  </TableCell>
+                                  <TableCell>
+                                    <Button size="small" disabled={!beforeUrl} onClick={() => setViewPhoto({ url: beforeUrl, label: 'Before Photo' })}
+                                      startIcon={<ImageIcon sx={{ fontSize: '14px !important' }} />}
+                                      sx={{ fontSize: 10, minWidth: 0, px: 0.8, py: 0.2, textTransform: 'none' }}>
+                                      {beforeUrl ? 'View' : '—'}
+                                    </Button>
+                                  </TableCell>
+                                  <TableCell>
+                                    <Button size="small" disabled={!afterUrl} onClick={() => setViewPhoto({ url: afterUrl, label: 'After Photo' })}
+                                      startIcon={<ImageIcon sx={{ fontSize: '14px !important' }} />}
+                                      sx={{ fontSize: 10, minWidth: 0, px: 0.8, py: 0.2, textTransform: 'none' }}>
+                                      {afterUrl ? 'View' : '—'}
+                                    </Button>
+                                  </TableCell>
+                                  <TableCell sx={{ fontSize: 12 }}>{p.operator?.name || '—'}</TableCell>
+                                  <TableCell sx={{ fontSize: 12, fontFamily: 'monospace' }}>{p.deviceId || '—'}</TableCell>
+                                  <TableCell sx={{ fontSize: 11, fontFamily: 'monospace', color: '#475569' }}>
+                                    {p.linkedAt ? new Date(p.linkedAt).toLocaleString() : '—'}
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            })}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </>
+              )}
+            </DialogContent>
+          </>
+        )}
+      </Dialog>
+
+      {/* Photo viewer — reuses the same simple pattern as Weighing History (Step 11) */}
+      <Dialog open={Boolean(viewPhoto)} onClose={() => setViewPhoto(null)} maxWidth="sm" fullWidth>
+        <DialogContent sx={{ p: 1.5 }}>
+          {viewPhoto?.url && (
+            <Box component="img" src={viewPhoto.url} alt={viewPhoto.label}
+              sx={{ width: '100%', borderRadius: 2, display: 'block' }} />
           )}
         </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2.5, gap: 1 }}>
-          <Button onClick={() => { setCreateOpen(false); setCreateError(''); }} variant="outlined" sx={{ borderRadius: 2 }}>Cancel</Button>
-          <Button onClick={handleCreate} variant="contained" disabled={creating}
-            startIcon={creating ? <CircularProgress size={16} color="inherit" /> : <QrCode2Icon />}
-            sx={{ background: 'linear-gradient(135deg,#1a227f,#3d47a3)', borderRadius: 2 }}>
-            {creating ? 'Generating...' : `Generate ${form.count || ''} QRs`}
-          </Button>
-        </DialogActions>
       </Dialog>
+
+      <NewBatchDialog
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onCreated={fetchBatches}
+      />
     </Layout>
   );
 }
