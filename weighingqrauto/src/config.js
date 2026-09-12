@@ -7,7 +7,7 @@
 // Code paths that must be correct on the very first request (login,
 // register, the shared API client) should call `ensureReachableBaseUrl()`
 // from serverConfig.js directly instead of reading this binding.
-export let BASE_URL = 'http://localhost:5001';
+export let BASE_URL = 'https://weighingqrauto-backend.onrender.com';
 
 // Internal: called by serverConfig.js whenever the resolved server URL
 // changes, so every existing `import {BASE_URL} from '../config'` consumer

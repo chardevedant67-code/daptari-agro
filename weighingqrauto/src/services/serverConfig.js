@@ -23,10 +23,14 @@ import {__setConfigBaseUrl} from '../config';
 
 const STORAGE_KEY = '@server_url';
 
-// Non-LAN fallbacks only — these are development-environment addresses
-// (emulator/simulator loopbacks), not a real backend IP, so they are safe
-// to keep as static seeds.
+// First entry is the QA/production target (Render backend) — tried first in
+// every discovery pass, so a working production server always wins over any
+// of the dev-only fallbacks below. Those dev fallbacks are left in place
+// (not a real backend IP, safe static seeds) purely so local/emulator
+// development against a local backend still works if this default is ever
+// unreachable — no discovery/LAN-scanning logic changed to make this work.
 const DEFAULT_URLS = [
+  'https://weighingqrauto-backend.onrender.com', // Production Render backend (QA target)
   'http://10.0.2.2:5001',   // Android emulator -> host loopback
   'http://localhost:5001',  // iOS simulator / same-device dev server
 ];
