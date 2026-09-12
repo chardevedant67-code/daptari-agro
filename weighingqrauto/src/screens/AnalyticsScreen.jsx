@@ -2,6 +2,7 @@ import React, {useState, useCallback} from 'react';
 import {useFocusEffect} from '@react-navigation/native';
 import {ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
+import {useSelector} from 'react-redux';
 import {COLORS, RADIUS, SHADOWS, SPACING} from '../ui/theme';
 import {fetchSessions} from '../services/api';
 
@@ -17,6 +18,7 @@ import {fetchSessions} from '../services/api';
 const SAMPLE_LIMIT = 200;
 
 export default function AnalyticsScreen() {
+  const token = useSelector(state => state.user.token);
   const [sessions, setSessions] = useState([]);
   const [totalMeasurements, setTotalMeasurements] = useState(null);
   const [linkedTotal, setLinkedTotal] = useState(null);
@@ -27,8 +29,8 @@ export default function AnalyticsScreen() {
     setLoading(true); setError('');
     try {
       const [all, linked] = await Promise.all([
-        fetchSessions({limit: 1}),
-        fetchSessions({status: 'linked', limit: SAMPLE_LIMIT}),
+        fetchSessions({limit: 1}, token),
+        fetchSessions({status: 'linked', limit: SAMPLE_LIMIT}, token),
       ]);
       setTotalMeasurements(all.pagination?.total ?? 0);
       setLinkedTotal(linked.pagination?.total ?? (linked.sessions || []).length);
@@ -40,7 +42,7 @@ export default function AnalyticsScreen() {
       setLinkedTotal(null);
     }
     setLoading(false);
-  }, []);
+  }, [token]);
 
   useFocusEffect(useCallback(() => { fetchAnalytics(); }, [fetchAnalytics]));
 

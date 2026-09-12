@@ -10,6 +10,18 @@ const AdminSchema = new mongoose.Schema(
     avatar:   { type: String, default: '' },
     isActive: { type: Boolean, default: true },
     lastLogin:{ type: Date },
+
+    // Password reset (Step 9B) — all optional/additive, unset for every
+    // existing document. Only a SHA-256 hash of the reset token is ever
+    // stored, never the raw token. Cleared back to undefined on successful
+    // reset (or overwritten by a fresh request) — that clearing is what
+    // makes a token one-time-use, no separate "used" flag needed.
+    resetPasswordTokenHash:  { type: String, select: false },
+    resetPasswordExpiresAt:  { type: Date },
+    // Sessions/JWTs issued before this timestamp are rejected by
+    // authMiddleware.js — this is what invalidates old tokens after a
+    // password reset, since the JWT payload itself carries no version claim.
+    passwordChangedAt:       { type: Date },
   },
   { timestamps: true }
 );

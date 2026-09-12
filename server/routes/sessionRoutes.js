@@ -2,26 +2,30 @@ const express  = require('express');
 const path     = require('path');
 const fs       = require('fs');
 const multer   = require('multer');
-const jwt      = require('jsonwebtoken');
 const router   = express.Router();
 const WeightSession = require('../models/WeightSession');
 const SeedPacket    = require('../models/SeedPacket');
 const LiveWeight    = require('../models/LiveWeight');
 const { uploadSeedPacketPhoto } = require('../utils/cloudinaryUpload');
+const { protectUser } = require('../middleware/userAuthMiddleware');
+const { protectAdminOrUser } = require('../middleware/authMiddleware');
+const { sessionCreateLimiter, sessionMutationLimiter } = require('../middleware/rateLimiter');
 
-// This flow stays intentionally unauthenticated (kiosk-style field use), but
-// if the mobile app sends a logged-in user's JWT we record who weighed the
-// packet. A missing/invalid token is not an error — operator stays null.
-async function getOperatorId(req) {
-  const header = req.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) return null;
-  try {
-    const decoded = jwt.verify(header.split(' ')[1], process.env.JWT_SECRET);
-    return decoded.id || null;
-  } catch (_) {
-    return null;
-  }
+// Every mutation route below requires `protectUser` — a real, active User
+// account (verified against the User collection, not just a JWT signed with
+// the shared secret). This is what makes an Admin token unusable here: an
+// Admin's id doesn't resolve against User.findById, so protectUser rejects
+// it with 401 exactly like any other unknown identity. `req.user._id` is
+// then the only source of `operator` — never a client-supplied value.
+//
+// A session's `operator`, once set, also defines who owns it: any of these
+// routes acting on an existing session first confirms it belongs to the
+// caller (or has no owner yet) before allowing the mutation, so User A can
+// never act on User B's session just by knowing/guessing its id.
+function isOwnedByOtherUser(session, userId) {
+  return Boolean(session.operator) && String(session.operator) !== String(userId);
 }
+const SESSION_FORBIDDEN = { success: false, code: 'SESSION_FORBIDDEN', message: 'This session belongs to a different operator.' };
 
 // Photo upload config
 const photoDir = path.join(__dirname, '..', 'uploads', 'session-photos');
@@ -41,9 +45,11 @@ const upload = multer({
 // already been filled — a new session is refused rather than relying on the
 // Android UI alone to stop the flow. `uniqueId` is optional and backward
 // compatible: omitting it preserves the exact previous behavior.
-router.post('/', async (req, res) => {
+router.post('/', protectUser, sessionCreateLimiter, async (req, res) => {
   try {
-    const operator = await getOperatorId(req);
+    // The authenticated User is the only source of `operator` — a
+    // client-supplied operator field, if any were ever sent, is never read.
+    const operator = req.user._id;
     // deviceId is optional and only ever stored if a real caller sends one —
     // never generated here.
     const { deviceId, uniqueId } = req.body;
@@ -80,11 +86,18 @@ router.post('/', async (req, res) => {
         });
       }
       if (activeSessions.length === 1) {
+        const existing = activeSessions[0];
+        // Resuming must only ever hand back the caller's own session — an
+        // active session already owned by a different operator is never
+        // silently taken over.
+        if (isOwnedByOtherUser(existing, req.user._id)) {
+          return res.status(403).json(SESSION_FORBIDDEN);
+        }
         return res.json({
           success: true,
           code: 'ACTIVE_SESSION_EXISTS',
-          sessionId: activeSessions[0]._id,
-          session: activeSessions[0],
+          sessionId: existing._id,
+          session: existing,
         });
       }
     }
@@ -104,6 +117,9 @@ router.post('/', async (req, res) => {
       if (createErr.code === 11000 && uniqueId) {
         const winner = await WeightSession.findOne({ packetUniqueId: uniqueId, status: 'active' });
         if (winner) {
+          if (isOwnedByOtherUser(winner, req.user._id)) {
+            return res.status(403).json(SESSION_FORBIDDEN);
+          }
           return res.json({ success: true, code: 'ACTIVE_SESSION_EXISTS', sessionId: winner._id, session: winner });
         }
       }
@@ -122,10 +138,11 @@ router.post('/', async (req, res) => {
 // caller can show it and let the user retry.
 // If either field is omitted (older/back-compat callers), behavior is
 // unchanged from before: the photo is just kept on local disk.
-router.post('/:id/photo', upload.single('photo'), async (req, res) => {
+router.post('/:id/photo', protectUser, sessionMutationLimiter, upload.single('photo'), async (req, res) => {
   try {
     const session = await WeightSession.findById(req.params.id);
     if (!session) return res.status(404).json({ success: false, message: 'Session not found' });
+    if (isOwnedByOtherUser(session, req.user._id)) return res.status(403).json(SESSION_FORBIDDEN);
     if (!req.file)  return res.status(400).json({ success: false, message: 'No photo uploaded' });
 
     const { uniqueId, phase } = req.body;
@@ -177,10 +194,11 @@ router.post('/:id/photo', upload.single('photo'), async (req, res) => {
 });
 
 // POST /api/sessions/:id/before-weight — capture before weight from latest IoT reading
-router.post('/:id/before-weight', async (req, res) => {
+router.post('/:id/before-weight', protectUser, sessionMutationLimiter, async (req, res) => {
   try {
     const session = await WeightSession.findById(req.params.id);
     if (!session) return res.status(404).json({ success: false, message: 'Session not found' });
+    if (isOwnedByOtherUser(session, req.user._id)) return res.status(403).json(SESSION_FORBIDDEN);
 
     // Try IoT reading first, fallback to body
     let weight = req.body.weight;
@@ -204,10 +222,11 @@ router.post('/:id/before-weight', async (req, res) => {
 });
 
 // POST /api/sessions/:id/after-weight — capture after weight from latest IoT reading
-router.post('/:id/after-weight', async (req, res) => {
+router.post('/:id/after-weight', protectUser, sessionMutationLimiter, async (req, res) => {
   try {
     const session = await WeightSession.findById(req.params.id);
     if (!session) return res.status(404).json({ success: false, message: 'Session not found' });
+    if (isOwnedByOtherUser(session, req.user._id)) return res.status(403).json(SESSION_FORBIDDEN);
 
     let weight = req.body.weight;
     if (!weight) {
@@ -240,13 +259,10 @@ router.post('/:id/after-weight', async (req, res) => {
 });
 
 // POST /api/sessions/:id/link/:uniqueId — bind session to QR packet
-router.post('/:id/link/:uniqueId', async (req, res) => {
+router.post('/:id/link/:uniqueId', protectUser, sessionMutationLimiter, async (req, res) => {
+  const { uniqueId } = req.params;
   try {
-    const session = await WeightSession.findById(req.params.id);
-    if (!session) return res.status(404).json({ success: false, message: 'Session not found' });
-    if (session.status === 'linked') return res.status(400).json({ success: false, message: 'Session already linked' });
-
-    const packet = await SeedPacket.findOne({ uniqueId: req.params.uniqueId });
+    const packet = await SeedPacket.findOne({ uniqueId });
     if (!packet) return res.status(404).json({ success: false, message: 'Packet not found' });
     // Existing protection, unchanged — only the machine-readable `code` is
     // new, for consistency with the same check now also done at session
@@ -259,30 +275,76 @@ router.post('/:id/link/:uniqueId', async (req, res) => {
       });
     }
 
-    // If neither photo step happened, packetUniqueId was never captured on
-    // the session (see POST /:id/photo above) — backfill it here so every
-    // completed measurement reliably records its packet ID for history.
-    if (!session.packetUniqueId) session.packetUniqueId = req.params.uniqueId;
+    // Atomically claim the session in a single findOneAndUpdate: it must
+    // still be 'active', owned by this operator (or not yet owned), and
+    // either not yet tied to any packet (never captured via the photo step —
+    // backfilled here, same as before) or already tied to exactly this one.
+    // MongoDB guarantees a findOneAndUpdate's match-and-write happens as one
+    // atomic step per document, so of any number of requests racing to link
+    // this same session, exactly one can ever flip status 'active' ->
+    // 'linked' here — every other one gets `claimed === null` back having
+    // mutated nothing.
+    const claimed = await WeightSession.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        status: 'active',
+        operator: { $in: [null, req.user._id] },
+        $or: [{ packetUniqueId: null }, { packetUniqueId: uniqueId }],
+      },
+      { $set: { status: 'linked', packetUniqueId: uniqueId } },
+    );
 
-    // Push session data into packet
-    packet.photoUrl       = session.photoUrl;
-    packet.beforePhotoUrl = session.beforePhotoUrl;
-    packet.afterPhotoUrl  = session.afterPhotoUrl;
-    packet.beforeWeight = session.beforeWeight;
-    packet.beforeTime   = session.beforeTime;
-    packet.afterWeight  = session.afterWeight;
-    packet.afterTime    = session.afterTime;
-    packet.difference   = session.difference;
-    packet.operator     = session.operator;
-    packet.deviceId     = session.deviceId;
-    packet.sessionId    = session._id;
-    packet.status       = 'filled';
-    packet.linkedAt     = new Date();
-    await packet.save();
+    if (!claimed) {
+      // The atomic claim above didn't match — re-read (read-only, nothing is
+      // mutated here) purely to report a specific reason why.
+      const current = await WeightSession.findById(req.params.id);
+      if (!current) return res.status(404).json({ success: false, message: 'Session not found' });
+      if (isOwnedByOtherUser(current, req.user._id)) return res.status(403).json(SESSION_FORBIDDEN);
+      if (current.status === 'cancelled') {
+        return res.status(400).json({ success: false, code: 'SESSION_CANCELLED', message: 'Cannot link a cancelled session' });
+      }
+      if (current.status === 'linked') {
+        return res.status(400).json({ success: false, message: 'Session already linked' });
+      }
+      if (current.packetUniqueId && current.packetUniqueId !== uniqueId) {
+        return res.status(400).json({ success: false, code: 'PACKET_MISMATCH', message: 'This session belongs to a different packet' });
+      }
+      return res.status(409).json({ success: false, message: 'Could not link session — please try again' });
+    }
 
-    session.status       = 'linked';
-    session.linkedPacket = packet._id;
-    await session.save();
+    // `claimed` is the pre-update document (Mongoose's findOneAndUpdate
+    // default), so it still carries the measurement fields recorded before
+    // this claim (beforeWeight/afterWeight/photos) — exactly what the packet
+    // needs below.
+    const session = claimed;
+
+    try {
+      packet.photoUrl       = session.photoUrl;
+      packet.beforePhotoUrl = session.beforePhotoUrl;
+      packet.afterPhotoUrl  = session.afterPhotoUrl;
+      packet.beforeWeight = session.beforeWeight;
+      packet.beforeTime   = session.beforeTime;
+      packet.afterWeight  = session.afterWeight;
+      packet.afterTime    = session.afterTime;
+      packet.difference   = session.difference;
+      packet.operator     = session.operator;
+      packet.deviceId     = session.deviceId;
+      packet.sessionId    = session._id;
+      packet.status       = 'filled';
+      packet.linkedAt     = new Date();
+      await packet.save();
+
+      await WeightSession.updateOne({ _id: session._id }, { $set: { linkedPacket: packet._id } });
+    } catch (packetErr) {
+      // The session was already atomically claimed above; if writing the
+      // packet fails, undo the claim so the session goes back to 'active'
+      // instead of being stuck 'linked' with no packet actually filled.
+      await WeightSession.updateOne(
+        { _id: session._id, status: 'linked' },
+        { $set: { status: 'active', packetUniqueId: session.packetUniqueId ?? null } },
+      );
+      throw packetErr;
+    }
 
     const populated = await SeedPacket.findById(packet._id)
       .populate('batchId', 'seedType batchNumber batchName seedCode batchCode month year warehouse rack shelf')
@@ -300,12 +362,13 @@ router.post('/:id/link/:uniqueId', async (req, res) => {
 // linked (historical) session can never be cancelled, reset, or reused, and
 // cancelling never touches the SeedPacket — an empty packet must remain
 // exactly as scannable/resumable as before.
-router.post('/:id/cancel', async (req, res) => {
+router.post('/:id/cancel', protectUser, sessionMutationLimiter, async (req, res) => {
   try {
     const session = await WeightSession.findById(req.params.id);
     if (!session) {
       return res.status(404).json({ success: false, code: 'SESSION_NOT_FOUND', message: 'Session not found' });
     }
+    if (isOwnedByOtherUser(session, req.user._id)) return res.status(403).json(SESSION_FORBIDDEN);
     if (session.status === 'linked') {
       return res.status(400).json({ success: false, code: 'SESSION_ALREADY_LINKED', message: 'Cannot cancel a session that is already linked' });
     }
@@ -322,13 +385,24 @@ router.post('/:id/cancel', async (req, res) => {
   }
 });
 
-// GET /api/sessions/:id — get session state
-router.get('/:id', async (req, res) => {
+// GET /api/sessions/:id — get session state.
+// Admins may look up any session; an operator (User token) may only look up
+// a session that is their own (or ownerless), same rule the mutation routes
+// above already enforce via isOwnedByOtherUser.
+router.get('/:id', protectAdminOrUser, async (req, res) => {
   try {
-    const session = await WeightSession.findById(req.params.id)
-      .populate('linkedPacket', 'uniqueId status')
-      .populate('operator', 'name');
+    // Ownership must be checked against the raw `operator` ObjectId — doing
+    // it after .populate('operator', ...) below would compare a populated
+    // sub-document against req.user._id and always read as "owned by
+    // someone else", so the check runs first and the populates happen only
+    // once the caller is confirmed allowed to see this session.
+    const session = await WeightSession.findById(req.params.id);
     if (!session) return res.status(404).json({ success: false, message: 'Session not found' });
+    if (req.user && isOwnedByOtherUser(session, req.user._id)) {
+      return res.status(403).json(SESSION_FORBIDDEN);
+    }
+    await session.populate('linkedPacket', 'uniqueId status');
+    await session.populate('operator', 'name');
     res.json({ success: true, session });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -347,8 +421,14 @@ router.get('/:id', async (req, res) => {
 //   from, to        — ISO date range on createdAt (inclusive)
 // Pagination (optional, backward compatible): page (default 1),
 // limit (default 200 — the previous hardcoded cap, max 500).
-// Sort: newest first by createdAt (the real session timestamp; never fabricated).
-router.get('/', async (req, res) => {
+// export=csv (optional): reuses this exact same filter, but returns every
+// matching session unpaginated (no skip/limit ceiling) for a complete
+// CSV/Excel export — normal (non-export) requests are entirely unaffected
+// by this branch and keep the 500-per-request ceiling as before.
+// Sort: newest first by createdAt, then by _id as a tiebreaker so two
+// sessions sharing a createdAt millisecond still sort deterministically —
+// required for stable pagination across pages.
+router.get('/', protectAdminOrUser, async (req, res) => {
   try {
     const { status, packetUniqueId, batchId, from, to } = req.query;
     const filter = {};
@@ -380,21 +460,25 @@ router.get('/', async (req, res) => {
       if (Object.keys(range).length) filter.createdAt = range;
     }
 
+    const isExport = req.query.export === 'csv';
     const page  = Math.max(parseInt(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit) || 200, 1), 500);
     const skip  = (page - 1) * limit;
 
+    let sessionsQuery = WeightSession.find(filter)
+      .populate({
+        path: 'linkedPacket',
+        select: 'uniqueId status batchId',
+        populate: { path: 'batchId', select: 'batchName batchNumber seedType month year warehouse rack shelf' },
+      })
+      .populate('operator', 'name')
+      .sort({ createdAt: -1, _id: -1 });
+    // Only the normal paginated path is bounded — export intentionally
+    // retrieves every matching document for the active filters.
+    if (!isExport) sessionsQuery = sessionsQuery.skip(skip).limit(limit);
+
     const [sessions, total] = await Promise.all([
-      WeightSession.find(filter)
-        .populate({
-          path: 'linkedPacket',
-          select: 'uniqueId status batchId',
-          populate: { path: 'batchId', select: 'batchName batchNumber seedType month year warehouse rack shelf' },
-        })
-        .populate('operator', 'name')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit),
+      sessionsQuery,
       WeightSession.countDocuments(filter),
     ]);
 
@@ -439,6 +523,17 @@ router.get('/', async (req, res) => {
         device: { deviceId: s.deviceId || null },
       };
     });
+
+    // Export mode returns the same shape as the normal response — every
+    // matching row is already in `history` since no skip/limit was applied
+    // above — so the frontend needs no special-case handling to consume it.
+    if (isExport) {
+      return res.json({
+        success: true,
+        sessions: history,
+        pagination: { page: 1, limit: total, total, totalPages: total > 0 ? 1 : 0 },
+      });
+    }
 
     res.json({
       success: true,

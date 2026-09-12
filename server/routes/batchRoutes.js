@@ -9,6 +9,35 @@ const { protect } = require('../middleware/authMiddleware');
 
 const QR_DIR = path.join(__dirname, '..', 'uploads', 'qr');
 
+// Public base URL that gets encoded into every packet's QR code (the
+// /scan/:uniqueId destination a phone opens on scan) — NOT the qrCodeUrl
+// path the PNG is stored at, which is unrelated and untouched by this.
+//
+// Production (NODE_ENV=production) must set PUBLIC_BASE_URL explicitly
+// (e.g. https://your-backend.onrender.com) — there is intentionally no
+// LAN-IP fallback here, so a missing value fails the request loudly instead
+// of silently baking an unreachable address into printed QR labels.
+// Local/dev keeps working exactly as before via SERVER_IP+PORT (or plain
+// localhost if neither is set) — PUBLIC_BASE_URL can also be set locally to
+// point at something else (e.g. a tunnel) if ever wanted.
+function resolveQrBaseUrl() {
+  const configured = process.env.PUBLIC_BASE_URL;
+  if (configured) {
+    if (!/^https?:\/\//i.test(configured)) {
+      throw new Error('PUBLIC_BASE_URL must start with http:// or https://');
+    }
+    return configured.replace(/\/+$/, ''); // no accidental double slash below
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('PUBLIC_BASE_URL is not configured — refusing to generate a QR code with an unreachable URL');
+  }
+
+  const port = process.env.PORT || 5001;
+  const host = process.env.SERVER_IP || 'localhost';
+  return `http://${host}:${port}`;
+}
+
 // POST /api/batches — create batch + bulk QR generation
 router.post('/', protect, async (req, res) => {
   try {
@@ -22,6 +51,10 @@ router.post('/', protect, async (req, res) => {
     if (isNaN(total) || total < 1 || total > 5000) {
       return res.status(400).json({ success: false, message: 'count must be 1–5000' });
     }
+
+    // Resolved before any write — a misconfigured PUBLIC_BASE_URL in
+    // production must fail here, not after a SeedBatch is already saved.
+    const baseUrl = resolveQrBaseUrl();
 
     // Optional storage/period fields — validated only when provided, never required
     const parsedMonth = (month !== undefined && month !== null && month !== '') ? parseInt(month) : null;
@@ -56,10 +89,6 @@ router.post('/', protect, async (req, res) => {
       const filePath = path.join(batchFolder, fileName);
       return { uniqueId, fileName, filePath };
     });
-
-    const serverIp  = process.env.SERVER_IP || '192.168.0.181';
-    const serverPort = process.env.PORT || 5001;
-    const baseUrl   = `http://${serverIp}:${serverPort}`;
 
     await Promise.all(packetDefs.map(({ uniqueId, filePath }) =>
       QRCode.toFile(filePath, `${baseUrl}/scan/${uniqueId}`, {  // URL so phone opens a page on scan
@@ -133,18 +162,96 @@ router.get('/', protect, async (req, res) => {
   }
 });
 
-// GET /api/batches/:id — batch + all packets
-router.get('/:id', protect, async (req, res) => {
+// GET /api/batches/inventory — Product Inventory page data: real packets
+// (one row per QR packet) joined with their batch, filtered by seed/batch/
+// warehouse (AND logic, all optional), plus the dropdown options and the
+// category counts for the stat cards. SeedBatch/SeedPacket are the sole
+// source of truth here — the legacy Product collection is never touched.
+router.get('/inventory', protect, async (req, res) => {
   try {
-    const batch = await SeedBatch.findById(req.params.id).populate('createdBy', 'name');
-    if (!batch) return res.status(404).json({ success: false, message: 'Batch not found' });
+    const { seedType, batchNumber, warehouse, search } = req.query;
 
-    // Populate operator so Admin sees a real name instead of a raw ObjectId
-    // (Step 14) — read-only, no document is modified.
-    const packets = await SeedPacket.find({ batchId: batch._id })
-      .populate('operator', 'name')
-      .sort({ uniqueId: 1 });
-    res.json({ success: true, batch, packets });
+    const limit = 10;
+    const requestedPage = parseInt(req.query.page, 10);
+    const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+    const skip = (page - 1) * limit;
+
+    // Dropdown options — always real, distinct values from SeedBatch.
+    // Batch options narrow to the selected seed, per spec; seed options
+    // always list every seed so switching seed never hides itself.
+    const seedOptions = (await SeedBatch.distinct('seedType')).filter(Boolean).sort((a, b) => a.localeCompare(b));
+    const batchOptionFilter = seedType ? { seedType } : {};
+    const batchOptions = (await SeedBatch.distinct('batchNumber', batchOptionFilter)).filter(Boolean).sort((a, b) => a.localeCompare(b));
+    const warehouseOptions = ['Warehouse A', 'Warehouse B', 'Warehouse C'];
+
+    const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    const batchMatch = {};
+    if (seedType)    batchMatch.seedType = seedType;
+    if (batchNumber) batchMatch.batchNumber = batchNumber;
+    // Warehouse is a fixed 3-option field (Warehouse A/B/C) — matched
+    // case-insensitively since older batches were free-typed before this
+    // dropdown existed (e.g. "warehouse b"). Seed/batch stay exact matches
+    // against the literal values their own dropdowns list.
+    if (warehouse)   batchMatch.warehouse = new RegExp(`^${escapeRegex(warehouse)}$`, 'i');
+
+    const pipeline = [
+      { $match: batchMatch },
+      { $lookup: { from: SeedPacket.collection.name, localField: '_id', foreignField: 'batchId', as: 'packets' } },
+      { $unwind: '$packets' },
+      { $project: {
+          _id:       '$packets._id',
+          id:        '$packets.uniqueId',
+          qrCodeUrl: '$packets.qrCodeUrl',
+          name:      '$seedType',
+          category:  '$seedCategory',
+          batch:     '$batchNumber',
+          location:  '$warehouse',
+          createdAt: '$packets.createdAt',
+      } },
+    ];
+    if (search) {
+      const rx = new RegExp(search, 'i');
+      pipeline.push({ $match: { $or: [{ id: rx }, { name: rx }, { batch: rx }] } });
+    }
+
+    // Counts reflect every matching packet (not just the displayed page),
+    // so the stat cards are always correct for the active filter combination.
+    const countsAgg = await SeedBatch.aggregate([
+      ...pipeline,
+      { $group: {
+          _id: null,
+          totalProducts: { $sum: 1 },
+          organicCount:  { $sum: { $cond: [{ $eq: ['$category', 'Organic'] }, 1, 0] } },
+          hybridCount:   { $sum: { $cond: [{ $eq: ['$category', 'Hybrid'] }, 1, 0] } },
+          heirloomModifiedCount: { $sum: { $cond: [{ $in: ['$category', ['Heirloom', 'Modified']] }, 1, 0] } },
+      } },
+    ]);
+    const counts = countsAgg[0] || { totalProducts: 0, organicCount: 0, hybridCount: 0, heirloomModifiedCount: 0 };
+    const totalPages = Math.ceil(counts.totalProducts / limit);
+
+    // Pagination is applied only to the rows returned for the table — the
+    // counts above (and totalPages) are computed from the full matching
+    // set beforehand, so cards always reflect every page, not just this one.
+    const products = await SeedBatch.aggregate([
+      ...pipeline,
+      { $sort: { createdAt: -1 } },
+      { $skip: skip },
+      { $limit: limit },
+    ]);
+
+    res.json({
+      success: true,
+      products,
+      totalProducts: counts.totalProducts,
+      organicCount: counts.organicCount,
+      hybridCount: counts.hybridCount,
+      heirloomModifiedCount: counts.heirloomModifiedCount,
+      seedOptions,
+      batchOptions,
+      warehouseOptions,
+      pagination: { page, limit, total: counts.totalProducts, totalPages },
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -157,6 +264,25 @@ router.get('/:id/qr-list', protect, async (req, res) => {
       .select('uniqueId qrCodeUrl status')
       .sort({ uniqueId: 1 });
     res.json({ success: true, packets });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// GET /api/batches/:id — batch + all packets
+// Kept below the fixed-path routes above (inventory, qr-list) so those
+// literal segments never get swallowed by this param route.
+router.get('/:id', protect, async (req, res) => {
+  try {
+    const batch = await SeedBatch.findById(req.params.id).populate('createdBy', 'name');
+    if (!batch) return res.status(404).json({ success: false, message: 'Batch not found' });
+
+    // Populate operator so Admin sees a real name instead of a raw ObjectId
+    // (Step 14) — read-only, no document is modified.
+    const packets = await SeedPacket.find({ batchId: batch._id })
+      .populate('operator', 'name')
+      .sort({ uniqueId: 1 });
+    res.json({ success: true, batch, packets });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

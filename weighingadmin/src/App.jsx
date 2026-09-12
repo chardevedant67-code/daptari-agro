@@ -4,6 +4,7 @@ import theme from './theme/theme';
 import { AuthProvider } from './context/AuthContext';
 import Login from './pages/Login';
 import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
 import Dashboard from './pages/Dashboard';
 import Products from './pages/Products';
 import EditProduct from './pages/EditProduct';
@@ -34,6 +35,7 @@ export default function App() {
             <Route path="/" element={<Navigate to="/login" replace />} />
             <Route path="/login"        element={<PublicRoute><Login /></PublicRoute>} />
             <Route path="/forgot-password" element={<PublicRoute><ForgotPassword /></PublicRoute>} />
+            <Route path="/reset-password"  element={<PublicRoute><ResetPassword /></PublicRoute>} />
             <Route path="/dashboard"    element={<PrivateRoute><Dashboard /></PrivateRoute>} />
             <Route path="/products"     element={<PrivateRoute><Products /></PrivateRoute>} />
             {/* "Add Product" used to render its own duplicate batch-creation

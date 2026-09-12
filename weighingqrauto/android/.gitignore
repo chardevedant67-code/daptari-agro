@@ -1,0 +1,5 @@
+# Release signing secrets - never commit these
+*.jks
+*.keystore
+!app/debug.keystore
+keystore.properties

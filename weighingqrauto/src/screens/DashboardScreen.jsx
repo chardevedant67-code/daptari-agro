@@ -2,16 +2,19 @@ import React, {useState, useCallback} from 'react';
 import {useFocusEffect} from '@react-navigation/native';
 import {ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
-import {useSelector} from 'react-redux';
+import {useSelector, useDispatch} from 'react-redux';
 import {useNavigation} from '../navigation/StackNavigator';
 import {COLORS, RADIUS, SHADOWS, SPACING} from '../ui/theme';
 import NotificationPanel from '../ui/components/NotificationPanel';
 
 import {fetchSessions} from '../services/api';
+import {logoutThunk} from '../store/slices/userSlice';
 
 export default function DashboardScreen() {
   const navigation = useNavigation();
+  const dispatch = useDispatch();
   const user = useSelector(s => s.user.user);
+  const token = useSelector(s => s.user.token);
   const notifications = useSelector(s => s.notifications.list);
   const unreadCount = notifications.filter(n => !n.read).length;
   const [stats, setStats] = useState(null);
@@ -32,8 +35,8 @@ export default function DashboardScreen() {
     setLoading(true); setError('');
     try {
       const [linked, active] = await Promise.all([
-        fetchSessions({status: 'linked', limit: 5}),
-        fetchSessions({status: 'active', limit: 1}),
+        fetchSessions({status: 'linked', limit: 5}, token),
+        fetchSessions({status: 'active', limit: 1}, token),
       ]);
       setRecords(linked.sessions || []);
       setStats({
@@ -46,7 +49,7 @@ export default function DashboardScreen() {
       setStats(null);
     }
     setLoading(false);
-  }, []);
+  }, [token]);
 
   useFocusEffect(useCallback(() => { loadData(); }, [loadData]));
 
@@ -197,8 +200,15 @@ export default function DashboardScreen() {
           </Pressable>
         </View>
 
-        {/* Sign Out */}
-        <Pressable style={styles.signOutBtn} onPress={() => navigation.replace('Login')}>
+        {/* Sign Out — must clear the Redux/AsyncStorage auth state via the
+            existing logoutThunk, not just navigate away, or the JWT stays
+            valid and a relaunch silently restores this session. */}
+        <Pressable
+          style={styles.signOutBtn}
+          onPress={async () => {
+            await dispatch(logoutThunk());
+            navigation.replace('Login');
+          }}>
           <Icon name="logout" size={18} color={COLORS.danger} />
           <Text style={styles.signOutTxt}>Sign Out</Text>
         </Pressable>

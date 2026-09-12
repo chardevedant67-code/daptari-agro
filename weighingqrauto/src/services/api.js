@@ -52,10 +52,10 @@ async function withNetworkErrors(context, fn) {
 // it now queries the real SeedPacket collection that Admin-generated QR
 // codes actually belong to (server/routes/packetRoutes.js), not the
 // unrelated/orphaned Product collection the old /p/api/:productId route used.
-export const fetchProductByScan = (uniqueId) =>
+export const fetchProductByScan = (uniqueId, token) =>
   withNetworkErrors(`GET /api/packets/${uniqueId}`, async () => {
     const url = await apiUrl(`/api/packets/${uniqueId}`);
-    const res = await fetch(url);
+    const res = await fetch(url, token ? {headers: {Authorization: `Bearer ${token}`}} : undefined);
     const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Packet not found');
     return data.packet;
@@ -97,10 +97,10 @@ async function throwOnFailure(res, fallbackMessage) {
 // entries from GET /api/sessions (each with a `.measurement` object) —
 // normally 0 or 1; more than 1 means pre-existing duplicate data the caller
 // must not guess between.
-export const findActiveSessionForPacket = (uniqueId) =>
+export const findActiveSessionForPacket = (uniqueId, token) =>
   withNetworkErrors('GET /api/sessions (active lookup)', async () => {
     const url = await apiUrl(`/api/sessions?packetUniqueId=${encodeURIComponent(uniqueId)}&status=active&limit=5`);
-    const res = await fetch(url);
+    const res = await fetch(url, token ? {headers: {Authorization: `Bearer ${token}`}} : undefined);
     const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Could not check for an existing session');
     return data.sessions;
@@ -130,7 +130,9 @@ export const createWeighSession = (token, uniqueId) =>
 // `uniqueId` + `phase` ('before'|'after') tell the backend which Cloudinary
 // folder (seed-passport/<phase>/<uniqueId>/) this photo belongs to. Without
 // them the backend falls back to local-disk-only storage.
-export const uploadSessionPhoto = (sessionId, photoUri, {uniqueId, phase} = {}) =>
+// `token` (the logged-in user's JWT) is now required by the backend — every
+// session mutation route only accepts the session's own operator.
+export const uploadSessionPhoto = (token, sessionId, photoUri, {uniqueId, phase} = {}) =>
   withNetworkErrors(`POST /api/sessions/${sessionId}/photo`, async () => {
     const filename = photoUri.split('/').pop();
     const ext      = filename.split('.').pop()?.toLowerCase() || 'jpg';
@@ -143,29 +145,32 @@ export const uploadSessionPhoto = (sessionId, photoUri, {uniqueId, phase} = {}) 
     const url = await apiUrl(`/api/sessions/${sessionId}/photo`);
     const res = await fetch(url, {
       method: 'POST',
-      body: fd, // no Content-Type — fetch sets the multipart boundary automatically
+      // No Content-Type — fetch sets the multipart boundary automatically;
+      // Authorization is the only header this request needs to add.
+      headers: {Authorization: `Bearer ${token}`},
+      body: fd,
     });
     const data = await throwOnFailure(res, 'Photo upload failed');
     return data; // { success, photoUrl, beforePhotoUrl, afterPhotoUrl }
   });
 
-export const saveBeforeWeight = (sessionId, weight) =>
+export const saveBeforeWeight = (token, sessionId, weight) =>
   withNetworkErrors(`POST /api/sessions/${sessionId}/before-weight`, async () => {
     const url = await apiUrl(`/api/sessions/${sessionId}/before-weight`);
     const res = await fetch(url, {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: {'Content-Type': 'application/json', Authorization: `Bearer ${token}`},
       body: JSON.stringify({weight}),
     });
     return throwOnFailure(res, 'Could not save before weight');
   });
 
-export const saveAfterWeight = (sessionId, weight) =>
+export const saveAfterWeight = (token, sessionId, weight) =>
   withNetworkErrors(`POST /api/sessions/${sessionId}/after-weight`, async () => {
     const url = await apiUrl(`/api/sessions/${sessionId}/after-weight`);
     const res = await fetch(url, {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: {'Content-Type': 'application/json', Authorization: `Bearer ${token}`},
       body: JSON.stringify({weight}),
     });
     return throwOnFailure(res, 'Could not save after weight'); // { success, afterWeight, afterTime, difference } — difference computed server-side
@@ -174,19 +179,19 @@ export const saveAfterWeight = (sessionId, weight) =>
 // Links the completed session onto the scanned SeedPacket — this is the
 // actual "save the measurement" step; the packet document is what
 // ProductDetailScreen/HistoryScreen read back afterwards.
-export const linkSessionToPacket = (sessionId, uniqueId) =>
+export const linkSessionToPacket = (token, sessionId, uniqueId) =>
   withNetworkErrors(`POST /api/sessions/${sessionId}/link/${uniqueId}`, async () => {
     const url = await apiUrl(`/api/sessions/${sessionId}/link/${uniqueId}`);
-    const res = await fetch(url, {method: 'POST'});
+    const res = await fetch(url, {method: 'POST', headers: {Authorization: `Bearer ${token}`}});
     const data = await throwOnFailure(res, 'Could not save measurement');
     return data.packet;
   });
 
 // List of saved measurements (filled packets) for the History screen.
-export const fetchPacketHistory = () =>
+export const fetchPacketHistory = (token) =>
   withNetworkErrors('GET /api/packets', async () => {
     const url = await apiUrl('/api/packets');
-    const res = await fetch(url);
+    const res = await fetch(url, token ? {headers: {Authorization: `Bearer ${token}`}} : undefined);
     const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Could not load history');
     return data.packets;
@@ -199,11 +204,11 @@ export const fetchPacketHistory = () =>
 // `pagination.total` is a server-side count independent of `limit` — the
 // only correct way to show an all-time total without being capped by
 // however many rows were actually fetched.
-export const fetchSessions = (params = {}) =>
+export const fetchSessions = (params = {}, token) =>
   withNetworkErrors('GET /api/sessions', async () => {
     const qs = new URLSearchParams(params).toString();
     const url = await apiUrl(`/api/sessions${qs ? `?${qs}` : ''}`);
-    const res = await fetch(url);
+    const res = await fetch(url, token ? {headers: {Authorization: `Bearer ${token}`}} : undefined);
     const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Could not load measurements');
     return data; // { success, sessions, pagination }

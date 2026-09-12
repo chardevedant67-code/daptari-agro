@@ -6,6 +6,7 @@ import {
 import {useFocusEffect} from '@react-navigation/native';
 import LinearGradient from 'react-native-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialIcons';
+import {useSelector} from 'react-redux';
 
 // Safely import Camera to avoid TCC crashes on Simulator
 const Camera = (Platform.OS === 'ios' && __DEV__)
@@ -124,6 +125,7 @@ const BORDER_W = 4;
 
 export default function ScannerScreen() {
   const navigation = useNavigation();
+  const token = useSelector(state => state.user.token);
   const lineY = useRef(new Animated.Value(0)).current;
   const [loading, setLoading]           = useState(false);
   const [error, setError]               = useState('');
@@ -196,7 +198,7 @@ export default function ScannerScreen() {
       scannedRef.current = true;
       setLoading(true);
       setError('');
-      const packet = await fetchProductByScan(productId);
+      const packet = await fetchProductByScan(productId, token);
       setLoading(false);
       navigation.push('ProductDetail', {packet});
     } catch (err) {
@@ -204,7 +206,7 @@ export default function ScannerScreen() {
       scannedRef.current = false;
       setError(err.message || 'Could not read QR from image');
     }
-  }, [loading, navigation]);
+  }, [loading, navigation, token]);
 
   const handleScannedCode = useCallback(async (event) => {
     const rawValue = event?.nativeEvent?.codeStringValue;
@@ -218,7 +220,7 @@ export default function ScannerScreen() {
     setError('');
 
     try {
-      const packet = await fetchProductByScan(productId);
+      const packet = await fetchProductByScan(productId, token);
       setLoading(false);
       navigation.push('ProductDetail', {packet});
     } catch (err) {
@@ -226,7 +228,7 @@ export default function ScannerScreen() {
       setError(err.message || 'Product not found');
       setTimeout(() => { scannedRef.current = false; }, 2500);
     }
-  }, [loading, navigation]);
+  }, [loading, navigation, token]);
 
   // ── Permission denied screen ──────────────────────
   if (camPermission === false) {

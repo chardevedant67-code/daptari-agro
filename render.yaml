@@ -22,9 +22,38 @@ services:
         sync: false
       - key: SERVER_IP
         sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
       - key: CLOUDINARY_CLOUD_NAME
         sync: false
       - key: CLOUDINARY_API_KEY
         sync: false
       - key: CLOUDINARY_API_SECRET
+        sync: false
+      # Only consumed by manually-run scripts (npm run seed, node reset-admin.js)
+      # via a Render shell — never read by the running server process itself.
+      - key: SEEDER_ADMIN_EMAIL
+        sync: false
+      - key: SEEDER_ADMIN_PASSWORD
+        sync: false
+      - key: SEEDER_OPERATOR_EMAIL
+        sync: false
+      - key: SEEDER_OPERATOR_PASSWORD
+        sync: false
+      - key: RESET_ADMIN_EMAIL
+        sync: false
+      - key: RESET_ADMIN_PASSWORD
+        sync: false
+      - key: RESET_OPERATOR_EMAIL
+        sync: false
+      - key: RESET_OPERATOR_PASSWORD
+        sync: false
+      # Admin frontend's deployed public origin — used only to build
+      # password-reset links, never QR codes (that's PUBLIC_BASE_URL above).
+      - key: APP_PUBLIC_URL
+        sync: false
+      # Resend — sends the Admin password-reset email only.
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
         sync: false

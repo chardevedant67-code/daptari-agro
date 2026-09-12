@@ -3,7 +3,7 @@ import {
   Avatar, Box, Button, Card, Chip, CircularProgress, Grid, IconButton,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   Typography, Dialog, DialogTitle, DialogContent, DialogActions,
-  TextField, FormControl, InputLabel, Select, MenuItem, Alert
+  TextField, FormControl, InputLabel, Select, MenuItem, Alert, Snackbar
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
@@ -12,12 +12,13 @@ import Menu from '@mui/material/Menu';
 import Layout from '../components/Layout';
 import StatCard from '../components/StatCard';
 import PageHeader from '../components/PageHeader';
-import api from '../services/api';
+import { userAdminAPI } from '../services/api';
 
+// User model's own roles (field accounts) — never Admin's admin/superadmin.
+// Admin/back-office account management lives elsewhere, not on this page.
 const roleStyle = {
-  superadmin: { bg: '#ede9fe', color: '#7c3aed' },
-  admin:      { bg: 'rgba(26,34,127,0.08)', color: '#1a227f' },
   operator:   { bg: '#f0fdf4', color: '#16a34a' },
+  supervisor: { bg: 'rgba(26,34,127,0.08)', color: '#1a227f' },
 };
 
 const initials = (name) => name?.split(' ').map(n => n[0]).join('').toUpperCase() || '?';
@@ -31,12 +32,20 @@ export default function Operators() {
   const [addOpen, setAddOpen]     = useState(false);
   const [saving, setSaving]       = useState(false);
   const [error, setError]         = useState('');
+  const [actionMsg, setActionMsg] = useState(''); // delete-conflict/error feedback
   const [form, setForm] = useState({ name: '', email: '', password: '', role: 'operator' });
+
+  // Admin-mediated password recovery for operators (Step 9A Option 1) —
+  // mobile Users have no self-service reset flow.
+  const [pwdOpen, setPwdOpen]     = useState(false);
+  const [pwdValue, setPwdValue]   = useState('');
+  const [pwdSaving, setPwdSaving] = useState(false);
+  const [pwdError, setPwdError]   = useState('');
 
   const fetchOperators = () => {
     setLoading(true);
-    api.get('/admin/all')
-      .then(r => setOperators(r.data.admins || []))
+    userAdminAPI.getAll()
+      .then(r => setOperators(r.data.users || []))
       .catch(() => {})
       .finally(() => setLoading(false));
   };
@@ -46,7 +55,7 @@ export default function Operators() {
   const handleAdd = async () => {
     setSaving(true); setError('');
     try {
-      await api.post('/admin/create', form);
+      await userAdminAPI.create(form);
       setAddOpen(false);
       setForm({ name: '', email: '', password: '', role: 'operator' });
       fetchOperators();
@@ -55,30 +64,53 @@ export default function Operators() {
     } finally { setSaving(false); }
   };
 
+  // A 409 here means this operator has historical weighing records — the
+  // backend refuses the delete and asks for deactivation instead, so that
+  // response must reach the admin rather than fail silently.
   const handleDelete = async (id) => {
-    try { await api.delete(`/admin/${id}`); fetchOperators(); } catch (_) {}
+    try {
+      await userAdminAPI.delete(id);
+      fetchOperators();
+    } catch (err) {
+      setActionMsg(err.response?.data?.message || 'Failed to delete operator');
+    }
     setAnchor(null);
   };
 
   const handleToggle = async (op) => {
     try {
-      await api.put(`/admin/${op._id}`, { isActive: !op.isActive });
+      await userAdminAPI.update(op._id, { isActive: !op.isActive });
       fetchOperators();
     } catch (_) {}
     setAnchor(null);
   };
 
+  const closePwdDialog = () => { setPwdOpen(false); setPwdError(''); setPwdValue(''); };
+
+  const handleSetPassword = async () => {
+    if (!selected || pwdValue.length < 6) return;
+    setPwdSaving(true); setPwdError('');
+    try {
+      await userAdminAPI.setPassword(selected._id, pwdValue);
+      closePwdDialog();
+    } catch (err) {
+      setPwdError(err.response?.data?.message || 'Failed to update password');
+    } finally {
+      setPwdSaving(false);
+    }
+  };
+
   const counts = {
-    total:  operators.length,
-    active: operators.filter(o => o.isActive).length,
-    admins: operators.filter(o => o.role === 'admin' || o.role === 'superadmin').length,
+    total:       operators.length,
+    active:      operators.filter(o => o.isActive).length,
+    supervisors: operators.filter(o => o.role === 'supervisor').length,
   };
 
   return (
     <Layout>
       <PageHeader
         title="Operators"
-        subtitle="Manage all system users and their access levels"
+        subtitle="Manage field operators and supervisors"
         actions={
           <Button variant="contained" startIcon={<AddIcon />} onClick={() => setAddOpen(true)}
             sx={{ background: 'linear-gradient(135deg,#1a227f,#3d47a3)' }}>
@@ -91,7 +123,7 @@ export default function Operators() {
         {[
           { title: 'Total Operators', value: String(counts.total),  icon: <PeopleIcon sx={{ color: '#1a227f', fontSize: 22 }} />, iconBg: 'rgba(26,34,127,0.08)' },
           { title: 'Active',          value: String(counts.active), icon: <PeopleIcon sx={{ color: '#10b981', fontSize: 22 }} />, iconBg: 'rgba(16,185,129,0.08)' },
-          { title: 'Admins',          value: String(counts.admins), icon: <PeopleIcon sx={{ color: '#6366f1', fontSize: 22 }} />, iconBg: 'rgba(99,102,241,0.08)' },
+          { title: 'Supervisors',     value: String(counts.supervisors), icon: <PeopleIcon sx={{ color: '#6366f1', fontSize: 22 }} />, iconBg: 'rgba(99,102,241,0.08)' },
           { title: 'Inactive',        value: String(counts.total - counts.active), icon: <PeopleIcon sx={{ color: '#f59e0b', fontSize: 22 }} />, iconBg: 'rgba(245,158,11,0.08)' },
         ].map(c => <Grid size={{ xs: 12, sm: 6, md: 3 }} key={c.title}><StatCard {...c} /></Grid>)}
       </Grid>
@@ -144,11 +176,30 @@ export default function Operators() {
       </Card>
 
       <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)}>
+        <MenuItem onClick={() => { setPwdOpen(true); setAnchor(null); }}>Set Password</MenuItem>
         <MenuItem onClick={() => handleToggle(selected)}>
           {selected?.isActive ? 'Deactivate' : 'Activate'}
         </MenuItem>
         <MenuItem onClick={() => handleDelete(selected?._id)} sx={{ color: '#dc2626' }}>Delete</MenuItem>
       </Menu>
+
+      {/* Set Password Dialog — superadmin-mediated recovery for a locked-out operator */}
+      <Dialog open={pwdOpen} onClose={closePwdDialog} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700 }}>Set Password — {selected?.name}</DialogTitle>
+        <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
+          <TextField
+            label="New Password" type="password" fullWidth autoFocus
+            value={pwdValue} onChange={e => setPwdValue(e.target.value)}
+            InputProps={{ sx: { borderRadius: 2 } }}
+          />
+          {pwdError && <Alert severity="error" sx={{ borderRadius: 2 }}>{pwdError}</Alert>}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 2, gap: 1 }}>
+          <Button onClick={closePwdDialog} variant="outlined">Cancel</Button>
+          <Button onClick={handleSetPassword} variant="contained" disabled={pwdSaving || pwdValue.length < 6}
+            sx={{ background: '#1a227f' }}>{pwdSaving ? 'Saving...' : 'Set Password'}</Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Add Operator Dialog */}
       <Dialog open={addOpen} onClose={() => setAddOpen(false)} maxWidth="sm" fullWidth>
@@ -161,8 +212,7 @@ export default function Operators() {
             <InputLabel>Role</InputLabel>
             <Select value={form.role} label="Role" onChange={e => setForm(p => ({ ...p, role: e.target.value }))} sx={{ borderRadius: 2 }}>
               <MenuItem value="operator">Operator</MenuItem>
-              <MenuItem value="admin">Admin</MenuItem>
-              <MenuItem value="superadmin">Super Admin</MenuItem>
+              <MenuItem value="supervisor">Supervisor</MenuItem>
             </Select>
           </FormControl>
           {error && <Alert severity="error" sx={{ borderRadius: 2 }}>{error}</Alert>}
@@ -173,6 +223,11 @@ export default function Operators() {
             sx={{ background: '#1a227f' }}>{saving ? 'Creating...' : 'Create Operator'}</Button>
         </DialogActions>
       </Dialog>
+
+      <Snackbar open={!!actionMsg} autoHideDuration={5000} onClose={() => setActionMsg('')}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
+        <Alert severity="error" onClose={() => setActionMsg('')} sx={{ borderRadius: 2 }}>{actionMsg}</Alert>
+      </Snackbar>
     </Layout>
   );
 }

@@ -1,11 +1,9 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { productAPI } from '../services/api';
+import { useState, useEffect, useCallback } from 'react';
+import { batchAPI } from '../services/api';
 import {
-  Box, Button, Card, Chip, Dialog, DialogActions, DialogContent,
-  DialogContentText, DialogTitle, Grid, IconButton, LinearProgress,
+  Box, Button, Card, Chip, Grid, IconButton, LinearProgress,
   Menu, MenuItem, Tab, Tabs, Table, TableBody, TableCell, TableContainer,
-  TableHead, TableRow, Typography, InputBase, Paper, Snackbar, Alert
+  TableHead, TableRow, Typography, InputBase, Paper, Snackbar, Alert, TextField, Tooltip
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import SearchIcon from '@mui/icons-material/Search';
@@ -21,14 +19,32 @@ import StatCard from '../components/StatCard';
 import PageHeader from '../components/PageHeader';
 import NewBatchDialog from '../components/NewBatchDialog';
 
+// Escapes text before it is interpolated into the print-label HTML below —
+// product.name/id/batch/qrCodeUrl are admin-entered/DB values, and this HTML
+// is built via document.write() with no other sanitization, so nothing
+// dynamic may reach it unescaped (including inside the img src="..." attribute,
+// where escaping the quote character also prevents attribute breakout).
+// `&` is replaced first so entities added for the other characters are never
+// themselves re-escaped. null/undefined become '' rather than the literal
+// text "undefined"/"null".
+function escapeHtml(value) {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function printQRLabel(product) {
-  const qrSrc = `http://localhost:5001${product.qrCodeUrl}`;
+  const qrSrc = escapeHtml(`${batchAPI.qrBaseUrl()}${product.qrCodeUrl}`);
   const win = window.open('', '_blank', 'width=400,height=500');
   win.document.write(`<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8"/>
-  <title>QR Label — ${product.name}</title>
+  <title>QR Label — ${escapeHtml(product.name)}</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: Arial, sans-serif; background: #fff; }
@@ -68,9 +84,9 @@ function printQRLabel(product) {
     ${Array(8).fill(`
     <div class="label">
       <img src="${qrSrc}" alt="QR"/>
-      <div class="name">${product.name}</div>
-      <div class="pid">${product.id}</div>
-      <div class="batch">Batch: ${product.batch}</div>
+      <div class="name">${escapeHtml(product.name)}</div>
+      <div class="pid">${escapeHtml(product.id)}</div>
+      <div class="batch">Batch: ${escapeHtml(product.batch)}</div>
     </div>`).join('')}
   </div>
 </body>
@@ -87,63 +103,84 @@ const seedTypeColor = (s) => {
 };
 
 export default function Products() {
-  const navigate = useNavigate();
   const [tab, setTab] = useState(0);
   const [search, setSearch] = useState('');
   const [products, setProducts] = useState([]);
   const [total, setTotal] = useState(0);
+  const [counts, setCounts] = useState({ organic: 0, hybrid: 0, heirloomModified: 0 });
   const [loading, setLoading] = useState(true);
+
+  // Product Inventory filters — real SeedBatch/SeedPacket data only.
+  const [seed, setSeed] = useState('');
+  const [batch, setBatch] = useState('');
+  const [warehouse, setWarehouse] = useState('');
+  const [seedOptions, setSeedOptions] = useState([]);
+  const [batchOptions, setBatchOptions] = useState([]);
+  const [warehouseOptions, setWarehouseOptions] = useState([]);
+  // Real pagination — every filter/search change handler below also resets
+  // page to 1 directly, so a stale page number never survives a new filter
+  // combination (done in the handlers, not an effect, to avoid a cascading
+  // render from calling setState inside a useEffect body).
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+
+  const hasActiveFilters = Boolean(seed || batch || warehouse);
+  const clearFilters = () => { setSeed(''); setBatch(''); setWarehouse(''); setPage(1); };
+  const handleBatchChange = (v) => { setBatch(v); setPage(1); };
+  const handleWarehouseChange = (v) => { setWarehouse(v); setPage(1); };
+  const handleSearchChange = (v) => { setSearch(v); setPage(1); };
 
   // Three-dot menu state
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuProduct, setMenuProduct] = useState(null);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [deleting, setDeleting] = useState(false);
 
   // New Batch dialog — opens directly on this page instead of redirecting
-  // to /batches. Products has no SeedBatch data of its own to refresh on
-  // success, so onCreated just surfaces the real result via a snackbar.
+  // to /batches. onCreated triggers an immediate inventory refresh below so
+  // the newly created batch's packets show up without a page reload.
   const [createOpen, setCreateOpen] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
 
   const openMenu = (e, product) => { setMenuAnchor(e.currentTarget); setMenuProduct(product); };
   const closeMenu = () => { setMenuAnchor(null); };
 
-  const handleDelete = async () => {
-    setDeleting(true);
+  // Batch dropdown depends on the selected seed — reset it whenever the
+  // seed changes so a stale, no-longer-relevant batch can't linger.
+  const handleSeedChange = (v) => { setSeed(v); setBatch(''); setPage(1); };
+
+  // Shared by the debounced filter/search effect below and by the New Batch
+  // dialog's onCreated callback, so a successful batch creation can refresh
+  // cards/dropdowns/table immediately without duplicating the fetch logic.
+  const fetchInventory = useCallback(async () => {
+    setLoading(true);
     try {
-      await productAPI.delete(menuProduct._id);
-      setProducts(prev => prev.filter(p => p._id !== menuProduct._id));
-      setTotal(t => t - 1);
+      const res = await batchAPI.inventory({
+        search,
+        seedType: seed || undefined,
+        batchNumber: batch || undefined,
+        warehouse: warehouse || undefined,
+        page,
+      });
+      setProducts(res.data.products);
+      setTotal(res.data.totalProducts);
+      setCounts({
+        organic: res.data.organicCount,
+        hybrid: res.data.hybridCount,
+        heirloomModified: res.data.heirloomModifiedCount,
+      });
+      setSeedOptions(res.data.seedOptions);
+      setBatchOptions(res.data.batchOptions);
+      setWarehouseOptions(res.data.warehouseOptions);
+      setTotalPages(res.data.pagination?.totalPages || 1);
     } catch (_) {}
-    setDeleting(false);
-    setConfirmDelete(false);
-    closeMenu();
-  };
+    setLoading(false);
+  }, [search, seed, batch, warehouse, page]);
 
   useEffect(() => {
-    const fetch = async () => {
-      setLoading(true);
-      try {
-        const res = await productAPI.getAll({ search, limit: 10 });
-        setProducts(res.data.products);
-        setTotal(res.data.count);
-      } catch (_) {}
-      setLoading(false);
-    };
-    const t = setTimeout(fetch, 300);
+    const t = setTimeout(fetchInventory, 300);
     return () => clearTimeout(t);
-  }, [search]);
+  }, [fetchInventory]);
 
-  const mapped = products.map(p => ({
-    id: p.productId,
-    _id: p._id,
-    name: p.productName,
-    category: p.seedType,
-    batch: p.batchNumber,
-    location: p.storageLocation,
-    qrCodeUrl: p.qrCodeUrl,
-  }));
+  const mapped = products;
 
   return (
     <Layout>
@@ -159,13 +196,39 @@ export default function Products() {
         }
       />
 
+      {/* Filters */}
+      <Card sx={{ p: 2, mb: 2.5 }}>
+        <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
+          <TextField select size="small" value={seed} onChange={e => handleSeedChange(e.target.value)}
+            SelectProps={{ displayEmpty: true }} sx={{ minWidth: 160 }}>
+            <MenuItem value=""><em>Select Seed</em></MenuItem>
+            {seedOptions.map(o => <MenuItem key={o} value={o}>{o}</MenuItem>)}
+          </TextField>
+          <TextField select size="small" value={batch} onChange={e => handleBatchChange(e.target.value)}
+            SelectProps={{ displayEmpty: true }} sx={{ minWidth: 160 }}>
+            <MenuItem value=""><em>Select Batch</em></MenuItem>
+            {batchOptions.map(o => <MenuItem key={o} value={o}>{o}</MenuItem>)}
+          </TextField>
+          <TextField select size="small" value={warehouse} onChange={e => handleWarehouseChange(e.target.value)}
+            SelectProps={{ displayEmpty: true }} sx={{ minWidth: 160 }}>
+            <MenuItem value=""><em>Select Warehouse</em></MenuItem>
+            {warehouseOptions.map(o => <MenuItem key={o} value={o}>{o}</MenuItem>)}
+          </TextField>
+          {hasActiveFilters && (
+            <Button size="small" onClick={clearFilters} sx={{ textTransform: 'none', fontSize: 12.5, fontWeight: 600, color: '#64748b' }}>
+              Clear Filters
+            </Button>
+          )}
+        </Box>
+      </Card>
+
       {/* Stats */}
       <Grid container spacing={2.5} sx={{ mb: 3 }}>
         {[
           { title: 'Total Products', value: String(total || 0), icon: <InventoryIcon sx={{ color: '#1a227f', fontSize: 22 }} />, iconBg: 'rgba(26,34,127,0.08)' },
-          { title: 'Organic', value: String(products.filter(p => p.seedType === 'Organic').length), icon: <InventoryIcon sx={{ color: '#10b981', fontSize: 22 }} />, iconBg: 'rgba(16,185,129,0.08)' },
-          { title: 'Hybrid', value: String(products.filter(p => p.seedType === 'Hybrid').length), icon: <InventoryIcon sx={{ color: '#6366f1', fontSize: 22 }} />, iconBg: 'rgba(99,102,241,0.08)' },
-          { title: 'Heirloom / Modified', value: String(products.filter(p => p.seedType === 'Heirloom' || p.seedType === 'Modified').length), icon: <InventoryIcon sx={{ color: '#f59e0b', fontSize: 22 }} />, iconBg: 'rgba(245,158,11,0.08)' },
+          { title: 'Organic', value: String(counts.organic || 0), icon: <InventoryIcon sx={{ color: '#10b981', fontSize: 22 }} />, iconBg: 'rgba(16,185,129,0.08)' },
+          { title: 'Hybrid', value: String(counts.hybrid || 0), icon: <InventoryIcon sx={{ color: '#6366f1', fontSize: 22 }} />, iconBg: 'rgba(99,102,241,0.08)' },
+          { title: 'Heirloom / Modified', value: String(counts.heirloomModified || 0), icon: <InventoryIcon sx={{ color: '#f59e0b', fontSize: 22 }} />, iconBg: 'rgba(245,158,11,0.08)' },
         ].map(c => (
           <Grid size={{ xs: 12, sm: 6, md: 3 }} key={c.title}>
             <StatCard {...c} />
@@ -181,7 +244,7 @@ export default function Products() {
             <Typography sx={{ fontSize: 13, color: '#1a227f', fontWeight: 700 }}>{total} products</Typography>
           </Box>
           <LinearProgress variant="determinate"
-            value={total ? (products.filter(p => p.seedType === 'Organic').length / total) * 100 : 0}
+            value={total ? (counts.organic / total) * 100 : 0}
             sx={{ height: 8, borderRadius: 99, background: '#f1f5f9', '& .MuiLinearProgress-bar': { background: '#10b981', borderRadius: 99 } }} />
         </Card>
       )}
@@ -195,7 +258,7 @@ export default function Products() {
           </Tabs>
           <Paper elevation={0} sx={{ display: 'flex', alignItems: 'center', px: 1.5, py: 0.5, border: '1px solid #e2e8f0', borderRadius: 2, minWidth: 220 }}>
             <SearchIcon sx={{ color: '#94a3b8', fontSize: 18, mr: 1 }} />
-            <InputBase placeholder="Search products..." value={search} onChange={e => setSearch(e.target.value)} sx={{ fontSize: 13, flex: 1 }} />
+            <InputBase placeholder="Search products..." value={search} onChange={e => handleSearchChange(e.target.value)} sx={{ fontSize: 13, flex: 1 }} />
           </Paper>
         </Box>
 
@@ -231,7 +294,7 @@ export default function Products() {
                     <TableCell sx={{ fontSize: 13, color: '#475569' }}>{p.location}</TableCell>
                     <TableCell>
                       <Button size="small" variant="outlined" startIcon={<QrCodeIcon sx={{ fontSize: '14px !important' }} />}
-                        onClick={() => window.open(`http://localhost:5001${p.qrCodeUrl || ''}`, '_blank')}
+                        onClick={() => window.open(`${batchAPI.qrBaseUrl()}${p.qrCodeUrl || ''}`, '_blank')}
                         sx={{ borderRadius: 1.5, fontSize: 11, fontWeight: 700, textTransform: 'none', py: 0.4, borderColor: '#1a227f', color: '#1a227f' }}>
                         QR Label
                       </Button>
@@ -246,51 +309,56 @@ export default function Products() {
           </Table>
         </TableContainer>
 
-        <Box sx={{ px: 3, py: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #f1f5f9' }}>
+        <Box sx={{ px: 3, py: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #f1f5f9', flexWrap: 'wrap', gap: 1 }}>
           <Typography sx={{ fontSize: 12, color: '#64748b' }}>Showing {mapped.length} of {total} products</Typography>
           <Box sx={{ display: 'flex', gap: 0.8, alignItems: 'center' }}>
+            <Button size="small" disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}
+              sx={{ minWidth: 0, px: 1, fontSize: 12, fontWeight: 600, textTransform: 'none', color: '#1a227f' }}>
+              Previous
+            </Button>
             <Typography sx={{ fontSize: 12, color: '#64748b', mr: 1 }}>Page</Typography>
-            <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#1a227f' }}>1</Typography>
-            <Typography sx={{ fontSize: 12, color: '#64748b' }}>of {Math.ceil(total / 10) || 1}</Typography>
+            <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#1a227f' }}>{page}</Typography>
+            <Typography sx={{ fontSize: 12, color: '#64748b' }}>of {totalPages || 1}</Typography>
+            <Button size="small" disabled={page >= (totalPages || 1)} onClick={() => setPage(p => p + 1)}
+              sx={{ minWidth: 0, px: 1, fontSize: 12, fontWeight: 600, textTransform: 'none', color: '#1a227f' }}>
+              Next
+            </Button>
           </Box>
         </Box>
       </Card>
-      {/* Three-dot dropdown menu */}
+      {/* Three-dot dropdown menu — Edit/Delete are disabled here because these
+          rows are real SeedPacket records; there is no current SeedBatch/
+          SeedPacket edit or delete API, and the legacy Product edit/delete
+          endpoints must never be called with a SeedPacket id. Print QR Label
+          is unaffected and keeps using the packet's existing permanent QR. */}
       <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>
-        <MenuItem onClick={() => { closeMenu(); navigate(`/products/edit/${menuProduct?._id}`); }}
-          sx={{ gap: 1.2, fontSize: 13 }}>
-          <EditIcon fontSize="small" sx={{ color: '#1a227f' }} /> Edit
-        </MenuItem>
+        <Tooltip title="Editing isn't available yet for Product Inventory records" placement="left">
+          <span>
+            <MenuItem disabled sx={{ gap: 1.2, fontSize: 13 }}>
+              <EditIcon fontSize="small" sx={{ color: '#1a227f' }} /> Edit
+            </MenuItem>
+          </span>
+        </Tooltip>
         <MenuItem onClick={() => { printQRLabel(menuProduct); closeMenu(); }}
           sx={{ gap: 1.2, fontSize: 13 }}>
           <PrintIcon fontSize="small" sx={{ color: '#1a227f' }} /> Print QR Label
         </MenuItem>
-        <MenuItem onClick={() => { setConfirmDelete(true); closeMenu(); }}
-          sx={{ gap: 1.2, fontSize: 13, color: '#ef4444' }}>
-          <DeleteIcon fontSize="small" /> Delete
-        </MenuItem>
+        <Tooltip title="Deleting isn't available yet for Product Inventory records" placement="left">
+          <span>
+            <MenuItem disabled sx={{ gap: 1.2, fontSize: 13, color: '#ef4444' }}>
+              <DeleteIcon fontSize="small" /> Delete
+            </MenuItem>
+          </span>
+        </Tooltip>
       </Menu>
-
-      {/* Delete confirmation dialog */}
-      <Dialog open={confirmDelete} onClose={() => setConfirmDelete(false)}>
-        <DialogTitle sx={{ fontWeight: 700 }}>Delete Product?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            <strong>{menuProduct?.name}</strong> aur uska QR permanently delete ho jayega. Yeh undo nahi ho sakta.
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2, gap: 1 }}>
-          <Button onClick={() => setConfirmDelete(false)} variant="outlined" sx={{ borderRadius: 2 }}>Cancel</Button>
-          <Button onClick={handleDelete} variant="contained" color="error" disabled={deleting} sx={{ borderRadius: 2 }}>
-            {deleting ? 'Deleting...' : 'Delete'}
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       <NewBatchDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onCreated={(data) => setSuccessMsg(`${data.packets.length} QR codes generated for "${data.batch.batchName}"`)}
+        onCreated={(data) => {
+          setSuccessMsg(`${data.packets.length} QR codes generated for "${data.batch.batchName}"`);
+          fetchInventory();
+        }}
       />
       <Snackbar open={!!successMsg} autoHideDuration={5000} onClose={() => setSuccessMsg('')}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>

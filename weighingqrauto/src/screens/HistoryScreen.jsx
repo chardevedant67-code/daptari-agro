@@ -2,12 +2,14 @@ import React, {useState, useCallback} from 'react';
 import {useFocusEffect} from '@react-navigation/native';
 import {ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View} from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
+import {useSelector} from 'react-redux';
 import {COLORS, RADIUS, SHADOWS, SPACING} from '../ui/theme';
 import {fetchPacketHistory} from '../services/api';
 
 const TABS = ['All', 'Gain', 'Loss'];
 
 export default function HistoryScreen() {
+  const token = useSelector(state => state.user.token);
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -17,7 +19,7 @@ export default function HistoryScreen() {
   // GET /api/packets — no mock/hardcoded data.
   const fetchRecords = useCallback(async () => {
     try {
-      const packets = await fetchPacketHistory();
+      const packets = await fetchPacketHistory(token);
       setRecords(packets || []);
     } catch (_) {
       setRecords([]);
@@ -25,7 +27,7 @@ export default function HistoryScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [token]);
 
   useFocusEffect(useCallback(() => { setLoading(true); fetchRecords(); }, [fetchRecords]));
 

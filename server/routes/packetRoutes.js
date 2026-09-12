@@ -1,10 +1,11 @@
 const express = require('express');
 const router  = express.Router();
 const SeedPacket = require('../models/SeedPacket');
+const { protectUser } = require('../middleware/userAuthMiddleware');
 
 // GET /api/packets — saved measurements (filled packets), most recent first.
 // Used by the Android History screen. Reads real SeedPacket documents only.
-router.get('/', async (req, res) => {
+router.get('/', protectUser, async (req, res) => {
   try {
     const packets = await SeedPacket.find({ status: 'filled' })
       .populate('batchId', 'seedType batchNumber batchName seedCode batchCode month year warehouse rack shelf')
@@ -19,7 +20,7 @@ router.get('/', async (req, res) => {
 });
 
 // GET /api/packets/:uniqueId — full packet info (used when QR scanned)
-router.get('/:uniqueId', async (req, res) => {
+router.get('/:uniqueId', protectUser, async (req, res) => {
   try {
     const packet = await SeedPacket.findOne({ uniqueId: req.params.uniqueId })
       .populate('batchId', 'seedType batchNumber batchName seedCode batchCode count createdAt month year warehouse rack shelf');

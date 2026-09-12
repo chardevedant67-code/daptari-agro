@@ -15,55 +15,64 @@ import StatCard from '../components/StatCard';
 import PageHeader from '../components/PageHeader';
 import { sessionAPI } from '../services/api';
 
-// Same limit used elsewhere in this app for a single bounded report-style
-// fetch (packetRoutes.js/sessionRoutes.js both cap history reads at 200
-// server-side). Reports summarizes a date range in one request rather than
-// paginating — Weighing History (Records page) already covers page-by-page
-// browsing of every session.
-const REPORT_LIMIT = 200;
-
 const statusStyle = {
   linked: { bg: '#dcfce7', color: '#16a34a', label: 'Linked' },
   active: { bg: '#fef9c3', color: '#ca8a04', label: 'Active' },
 };
 
+const REPORT_COLUMNS = ['Packet ID', 'Batch Name', 'Batch Number', 'Seed Type', 'Before Weight', 'After Weight', 'Difference', 'Date/Time', 'Operator', 'Device ID', 'Status'];
+const sessionRow = (s) => [
+  s.measurement.packetUniqueId || s.packet?.uniqueId || '',
+  s.batch?.batchName || '', s.batch?.batchNumber || '', s.batch?.seedType || '',
+  s.measurement.beforeWeight ?? '', s.measurement.afterWeight ?? '', s.measurement.difference ?? '',
+  new Date(s.measurement.createdAt).toLocaleString(),
+  s.operator?.name || '', s.device?.deviceId || '', s.measurement.status || '',
+];
+
+// CSV field escaping: null/undefined -> '', and any field containing a
+// comma, double quote, or newline/carriage-return is wrapped in double
+// quotes with internal quotes doubled ("" ), per RFC 4180.
+const csvEscape = (value) => {
+  const s = value == null ? '' : String(value);
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+
 const exportCSV = (sessions) => {
-  const h = ['Packet ID', 'Batch Name', 'Batch Number', 'Seed Type', 'Before Weight', 'After Weight', 'Difference', 'Date/Time', 'Operator', 'Device ID', 'Status'];
-  const rows = sessions.map(s => [
-    s.measurement.packetUniqueId || s.packet?.uniqueId || '',
-    s.batch?.batchName || '', s.batch?.batchNumber || '', s.batch?.seedType || '',
-    s.measurement.beforeWeight ?? '', s.measurement.afterWeight ?? '', s.measurement.difference ?? '',
-    new Date(s.measurement.createdAt).toLocaleString(),
-    s.operator?.name || '', s.device?.deviceId || '', s.measurement.status || '',
-  ]);
-  const csv = [h, ...rows].map(r => r.join(',')).join('\n');
+  const rows = [REPORT_COLUMNS, ...sessions.map(sessionRow)];
+  const csv = rows.map(r => r.map(csvEscape).join(',')).join('\r\n');
   const blob = new Blob([csv], { type: 'text/csv' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'weighing-report.csv'; a.click();
 };
 
+// TSV has no standard quoting mechanism — an embedded tab or newline would
+// otherwise break the column/row structure, so it's neutralized to a single
+// space instead (there is no way to "escape" it the way CSV's quotes do).
+const tsvEscape = (value) => {
+  const s = value == null ? '' : String(value);
+  return s.replace(/[\t\r\n]+/g, ' ');
+};
+
 const exportExcel = (sessions) => {
-  const h = ['Packet ID', 'Batch Name', 'Batch Number', 'Seed Type', 'Before Weight', 'After Weight', 'Difference', 'Date/Time', 'Operator', 'Device ID', 'Status'];
-  const rows = sessions.map(s => [
-    s.measurement.packetUniqueId || s.packet?.uniqueId || '',
-    s.batch?.batchName || '', s.batch?.batchNumber || '', s.batch?.seedType || '',
-    s.measurement.beforeWeight ?? '', s.measurement.afterWeight ?? '', s.measurement.difference ?? '',
-    new Date(s.measurement.createdAt).toLocaleString(),
-    s.operator?.name || '', s.device?.deviceId || '', s.measurement.status || '',
-  ]);
-  const tsv = [h, ...rows].map(r => r.join('\t')).join('\n');
+  const rows = [REPORT_COLUMNS, ...sessions.map(sessionRow)];
+  const tsv = rows.map(r => r.map(tsvEscape).join('\t')).join('\r\n');
   const blob = new Blob([tsv], { type: 'application/vnd.ms-excel' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'weighing-report.xls'; a.click();
 };
 
 export default function Reports() {
   const [sessions, setSessions]   = useState([]);
-  const [pagination, setPagination] = useState({ total: 0 });
+  const [pagination, setPagination] = useState({ page: 1, limit: 50, total: 0, totalPages: 1 });
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState('');
+  const [page, setPage]           = useState(1);
   const [statusFilter, setStatusFilter] = useState('');
   const [datePreset, setDatePreset]     = useState('7d');
   const [customStart, setCustomStart]   = useState('');
   const [customEnd, setCustomEnd]       = useState('');
+  const [csvLoading, setCsvLoading]     = useState(false);
+  const [excelLoading, setExcelLoading] = useState(false);
+
+  const PER_PAGE = 50;
 
   const getDateRange = () => {
     if (datePreset === 'custom') {
@@ -77,26 +86,69 @@ export default function Reports() {
     return { from: from.toISOString() };
   };
 
-  const fetchReport = () => {
+  // Shared by the table fetch and both export handlers so the exact same
+  // filters are always in effect for all three — this is what guarantees
+  // the CSV/Excel export can never disagree with what the table shows.
+  const buildFilterParams = () => {
     const { from, to } = getDateRange();
-    const params = { limit: REPORT_LIMIT };
+    const params = {};
     if (statusFilter) params.status = statusFilter;
     if (from) params.from = from;
     if (to) params.to = to;
-    sessionAPI.getAll(params)
+    return params;
+  };
+
+  const fetchReport = () => {
+    setLoading(true);
+    sessionAPI.getAll({ ...buildFilterParams(), page, limit: PER_PAGE })
       .then(r => {
         setSessions(r.data.sessions || []);
-        setPagination(r.data.pagination || { total: 0 });
+        setPagination(r.data.pagination || { page, limit: PER_PAGE, total: 0, totalPages: 1 });
         setError('');
       })
       .catch(err => setError(err.response?.data?.message || 'Could not load report data'))
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchReport(); }, [statusFilter, datePreset, customStart, customEnd]);
+  useEffect(() => { fetchReport(); }, [page, statusFilter, datePreset, customStart, customEnd]);
+
+  const changeStatusFilter = (v) => { setStatusFilter(v); setPage(1); };
+  const changeDatePreset   = (v) => { setDatePreset(v); setPage(1); };
+  const changeCustomStart  = (v) => { setCustomStart(v); setPage(1); };
+  const changeCustomEnd    = (v) => { setCustomEnd(v); setPage(1); };
 
   const resetFilters = () => {
-    setStatusFilter(''); setDatePreset('7d'); setCustomStart(''); setCustomEnd('');
+    setStatusFilter(''); setDatePreset('7d'); setCustomStart(''); setCustomEnd(''); setPage(1);
+  };
+
+  // Both exports fetch the COMPLETE filtered dataset from the backend
+  // (export=csv, no pagination ceiling) — never the currently-loaded page —
+  // so the result is identical regardless of which page the table happens
+  // to be showing when the button is clicked.
+  const handleExportCSV = async () => {
+    if (csvLoading) return;
+    setCsvLoading(true); setError('');
+    try {
+      const res = await sessionAPI.exportAll(buildFilterParams());
+      exportCSV(res.data.sessions || []);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Could not export CSV');
+    } finally {
+      setCsvLoading(false);
+    }
+  };
+
+  const handleExportExcel = async () => {
+    if (excelLoading) return;
+    setExcelLoading(true); setError('');
+    try {
+      const res = await sessionAPI.exportAll(buildFilterParams());
+      exportExcel(res.data.sessions || []);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Could not export report');
+    } finally {
+      setExcelLoading(false);
+    }
   };
 
   // Real metrics only — computed from the actually-returned sessions, never
@@ -118,10 +170,10 @@ export default function Reports() {
         subtitle="Measurement analysis from real SeedBatch → SeedPacket → WeightSession data"
         actions={
           <Box sx={{ display: 'flex', gap: 1.5 }}>
-            <Button variant="outlined" startIcon={<DownloadIcon />} onClick={() => exportCSV(sessions)}
-              sx={{ borderRadius: 2, borderColor: '#e2e8f0', color: '#475569' }}>Export CSV</Button>
-            <Button variant="outlined" startIcon={<DownloadIcon />} onClick={() => exportExcel(sessions)}
-              sx={{ borderRadius: 2, borderColor: '#e2e8f0', color: '#475569' }}>Export Excel</Button>
+            <Button variant="outlined" startIcon={<DownloadIcon />} onClick={handleExportCSV} disabled={csvLoading}
+              sx={{ borderRadius: 2, borderColor: '#e2e8f0', color: '#475569' }}>{csvLoading ? 'Exporting...' : 'Export CSV'}</Button>
+            <Button variant="outlined" startIcon={<DownloadIcon />} onClick={handleExportExcel} disabled={excelLoading}
+              sx={{ borderRadius: 2, borderColor: '#e2e8f0', color: '#475569' }}>{excelLoading ? 'Exporting...' : 'Export Excel'}</Button>
           </Box>
         }
       />
@@ -133,7 +185,7 @@ export default function Reports() {
         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
           <FormControl size="small" sx={{ minWidth: 140 }}>
             <InputLabel>Status</InputLabel>
-            <Select value={statusFilter} label="Status" onChange={e => setStatusFilter(e.target.value)} sx={{ borderRadius: 2 }}>
+            <Select value={statusFilter} label="Status" onChange={e => changeStatusFilter(e.target.value)} sx={{ borderRadius: 2 }}>
               <MenuItem value="">All</MenuItem>
               <MenuItem value="active">Active</MenuItem>
               <MenuItem value="linked">Linked</MenuItem>
@@ -141,7 +193,7 @@ export default function Reports() {
           </FormControl>
           <FormControl size="small" sx={{ minWidth: 160 }}>
             <InputLabel>Date Preset</InputLabel>
-            <Select value={datePreset} label="Date Preset" onChange={e => setDatePreset(e.target.value)} sx={{ borderRadius: 2 }}>
+            <Select value={datePreset} label="Date Preset" onChange={e => changeDatePreset(e.target.value)} sx={{ borderRadius: 2 }}>
               <MenuItem value="24h">Last 24 Hours</MenuItem>
               <MenuItem value="7d">Last 7 Days</MenuItem>
               <MenuItem value="30d">Last 30 Days</MenuItem>
@@ -151,10 +203,10 @@ export default function Reports() {
           {datePreset === 'custom' && (
             <>
               <TextField size="small" label="Start Date" type="date" value={customStart}
-                onChange={e => setCustomStart(e.target.value)} InputLabelProps={{ shrink: true }}
+                onChange={e => changeCustomStart(e.target.value)} InputLabelProps={{ shrink: true }}
                 sx={{ minWidth: 150, '& .MuiOutlinedInput-root': { borderRadius: 2 } }} />
               <TextField size="small" label="End Date" type="date" value={customEnd}
-                onChange={e => setCustomEnd(e.target.value)} InputLabelProps={{ shrink: true }}
+                onChange={e => changeCustomEnd(e.target.value)} InputLabelProps={{ shrink: true }}
                 sx={{ minWidth: 150, '& .MuiOutlinedInput-root': { borderRadius: 2 } }} />
             </>
           )}
@@ -166,7 +218,7 @@ export default function Reports() {
       {/* KPI Cards — real WeightSession metrics only */}
       <Grid container spacing={2.5} sx={{ mb: 3 }}>
         {[
-          { title: 'Total Measurements', value: String(pagination.total ?? sessions.length), icon: <ScaleIcon sx={{ color: '#1a227f', fontSize: 22 }} />, iconBg: 'rgba(26,34,127,0.08)' },
+          { title: 'Total Measurements', value: String(pagination.total), icon: <ScaleIcon sx={{ color: '#1a227f', fontSize: 22 }} />, iconBg: 'rgba(26,34,127,0.08)' },
           { title: 'Linked',             value: String(linkedCount),                          icon: <TaskAltIcon sx={{ color: '#10b981', fontSize: 22 }} />, iconBg: 'rgba(16,185,129,0.08)' },
           { title: 'Avg Difference',     value: avgDifference != null ? `${avgDifference.toFixed(2)} kg` : '—', icon: <TrendingUpIcon sx={{ color: '#6366f1', fontSize: 22 }} />, iconBg: 'rgba(99,102,241,0.08)' },
           { title: 'Min / Max Difference', value: (minDifference != null && maxDifference != null) ? `${minDifference.toFixed(2)} / ${maxDifference.toFixed(2)} kg` : '—', icon: <CompareArrowsIcon sx={{ color: '#f59e0b', fontSize: 22 }} />, iconBg: 'rgba(245,158,11,0.08)' },
@@ -214,7 +266,7 @@ export default function Reports() {
       <Card>
         <Box sx={{ px: 3, py: 2.5, borderBottom: '1px solid #f1f5f9' }}>
           <Typography sx={{ fontWeight: 700, fontSize: 15 }}>Measurement Log</Typography>
-          <Typography sx={{ fontSize: 12, color: '#64748b' }}>Showing {sessions.length} of {pagination.total ?? sessions.length} measurements in selected period</Typography>
+          <Typography sx={{ fontSize: 12, color: '#64748b' }}>Showing {sessions.length} of {pagination.total} measurements in selected period</Typography>
         </Box>
         {loading ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}><CircularProgress sx={{ color: '#1a227f' }} /></Box>
@@ -260,6 +312,22 @@ export default function Reports() {
             </Table>
           </TableContainer>
         )}
+
+        <Box sx={{ px: 3, py: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #f1f5f9' }}>
+          <Typography sx={{ fontSize: 12, color: '#64748b' }}>
+            Page {pagination.page} of {pagination.totalPages || 1} — {pagination.total} total measurements
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 0.8 }}>
+            <Button size="small" variant="outlined" disabled={page === 1} onClick={() => setPage(p => p - 1)}
+              sx={{ minWidth: 32, height: 32, p: 0, borderRadius: 1.5, borderColor: '#e2e8f0', color: '#64748b' }}>‹</Button>
+            {Array.from({ length: Math.min(pagination.totalPages || 1, 5) }, (_, i) => i + 1).map(p => (
+              <Button key={p} size="small" variant={page === p ? 'contained' : 'outlined'} onClick={() => setPage(p)}
+                sx={{ minWidth: 32, height: 32, p: 0, borderRadius: 1.5, fontSize: 12, ...(page === p ? { background: '#1a227f' } : { borderColor: '#e2e8f0', color: '#64748b' }) }}>{p}</Button>
+            ))}
+            <Button size="small" variant="outlined" disabled={page >= (pagination.totalPages || 1)} onClick={() => setPage(p => p + 1)}
+              sx={{ minWidth: 32, height: 32, p: 0, borderRadius: 1.5, borderColor: '#e2e8f0', color: '#64748b' }}>›</Button>
+          </Box>
+        </Box>
       </Card>
     </Layout>
   );

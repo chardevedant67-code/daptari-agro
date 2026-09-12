@@ -128,7 +128,7 @@ export default function WeighScanScreen() {
   const resumeOrStartFresh = useCallback(async (uniqueId) => {
     let activeSessions = [];
     try {
-      activeSessions = await findActiveSessionForPacket(uniqueId);
+      activeSessions = await findActiveSessionForPacket(uniqueId, token);
     } catch (_) {
       // Lookup failing isn't fatal — fall back to starting fresh. The
       // backend's own unique-active-session guard at creation time still
@@ -170,7 +170,7 @@ export default function WeighScanScreen() {
       setStep(2);
     }
     return true;
-  }, [dispatch]);
+  }, [dispatch, token]);
 
   // Gallery QR pick
   const handleGalleryPick = useCallback(async () => {
@@ -185,7 +185,7 @@ export default function WeighScanScreen() {
       if (!uniqueId) return;
       scannedRef.current = true;
       setError('');
-      const p = await fetchProductByScan(uniqueId);
+      const p = await fetchProductByScan(uniqueId, token);
       if (p.status === 'filled') {
         handleAlreadyFilled(p);
         return;
@@ -197,7 +197,7 @@ export default function WeighScanScreen() {
       scannedRef.current = false;
       setError(err.message || 'Could not read QR from image');
     }
-  }, [handleAlreadyFilled, resumeOrStartFresh]);
+  }, [handleAlreadyFilled, resumeOrStartFresh, token]);
 
   // QR scanned
   const handleQRScanned = useCallback(async (event) => {
@@ -208,7 +208,7 @@ export default function WeighScanScreen() {
     scannedRef.current = true;
     setError('');
     try {
-      const p = await fetchProductByScan(uniqueId);
+      const p = await fetchProductByScan(uniqueId, token);
       if (p.status === 'filled') {
         handleAlreadyFilled(p);
         return;
@@ -220,7 +220,7 @@ export default function WeighScanScreen() {
       setError(err.message || 'Packet not found');
       setTimeout(() => { scannedRef.current = false; }, 2500);
     }
-  }, [handleAlreadyFilled, resumeOrStartFresh]);
+  }, [handleAlreadyFilled, resumeOrStartFresh, token]);
 
   // Take photo — reused for both the before and after capture steps, just
   // targeting whichever state setter is passed in.
@@ -264,7 +264,7 @@ export default function WeighScanScreen() {
         sid = await createWeighSession(token, packet?.uniqueId);
         setSessionId(sid);
       }
-      await saveBeforeWeight(sid, before);
+      await saveBeforeWeight(token, sid, before);
       setStep(3);
     } catch (err) {
       if (err.code === 'PACKET_ALREADY_FILLED') {
@@ -287,7 +287,7 @@ export default function WeighScanScreen() {
     if (!beforePhotoUri) { setStep(4); return; }
     setSaving(true); setError('');
     try {
-      await uploadSessionPhoto(sessionId, beforePhotoUri, {uniqueId: packet.uniqueId, phase: 'before'});
+      await uploadSessionPhoto(token, sessionId, beforePhotoUri, {uniqueId: packet.uniqueId, phase: 'before'});
       setStep(4);
     } catch (err) {
       setError(err.message || 'Before photo upload failed — please try again');
@@ -302,7 +302,7 @@ export default function WeighScanScreen() {
     if (!after || after <= 0) { setError('Enter a valid after weight'); return; }
     setSaving(true); setError('');
     try {
-      await saveAfterWeight(sessionId, after);
+      await saveAfterWeight(token, sessionId, after);
       setStep(5);
     } catch (err) {
       setError(err.message || 'Could not save after weight — please try again');
@@ -319,9 +319,9 @@ export default function WeighScanScreen() {
     setSaving(true); setError('');
     try {
       if (afterPhotoUri) {
-        await uploadSessionPhoto(sessionId, afterPhotoUri, {uniqueId: packet.uniqueId, phase: 'after'});
+        await uploadSessionPhoto(token, sessionId, afterPhotoUri, {uniqueId: packet.uniqueId, phase: 'after'});
       }
-      const saved = await linkSessionToPacket(sessionId, packet.uniqueId);
+      const saved = await linkSessionToPacket(token, sessionId, packet.uniqueId);
       setLinkedPacket(saved);
 
       const before = parseFloat(beforeWeightVal);
@@ -340,7 +340,7 @@ export default function WeighScanScreen() {
         // state before showing it — this screen's local packet/weight state
         // belongs to the losing attempt and must not be shown as if saved.
         try {
-          const fresh = await fetchProductByScan(packet.uniqueId);
+          const fresh = await fetchProductByScan(packet.uniqueId, token);
           handleAlreadyFilled(fresh);
         } catch (_) {
           handleAlreadyFilled(packet);

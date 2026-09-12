@@ -11,12 +11,11 @@ import ScaleIcon from '@mui/icons-material/Scale';
 import Layout from '../components/Layout';
 import StatCard from '../components/StatCard';
 import PageHeader from '../components/PageHeader';
-import { sessionAPI } from '../services/api';
+import { sessionAPI, API_ORIGIN } from '../services/api';
 
-// Same hardcoded API host already used elsewhere in this app (services/api.js,
-// batchAPI.qrBaseUrl(), AddProduct.jsx) — only relative/local paths need it;
-// real Cloudinary URLs are already absolute and must be used as-is.
-const API_ORIGIN = 'http://localhost:5001';
+// Centralized, env-driven backend origin (services/api.js) — only
+// relative/local paths need it; real Cloudinary URLs are already absolute
+// and must be used as-is.
 const resolvePhotoUrl = (url) => {
   if (!url) return null;
   if (/^https?:\/\//i.test(url)) return url;
@@ -29,6 +28,14 @@ const statusStyle = {
   cancelled: { bg: '#f1f5f9', color: '#64748b', label: 'Cancelled' },
 };
 
+// CSV field escaping: null/undefined -> '', and any field containing a
+// comma, double quote, or newline/carriage-return is wrapped in double
+// quotes with internal quotes doubled ("" ), per RFC 4180.
+const csvEscape = (value) => {
+  const s = value == null ? '' : String(value);
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+
 const exportCSV = (sessions) => {
   const h = ['Packet ID', 'Batch Name', 'Batch Number', 'Seed Type', 'Before Weight', 'After Weight', 'Difference', 'Date/Time', 'Operator', 'Device ID', 'Status'];
   const rows = sessions.map(s => [
@@ -38,7 +45,7 @@ const exportCSV = (sessions) => {
     new Date(s.measurement.createdAt).toLocaleString(),
     s.operator?.name || '', s.device?.deviceId || '', s.measurement.status || '',
   ]);
-  const csv = [h, ...rows].map(r => r.join(',')).join('\n');
+  const csv = [h, ...rows].map(r => r.map(csvEscape).join(',')).join('\r\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
   a.download = 'weighing-history.csv'; a.click();
@@ -54,15 +61,24 @@ export default function Records() {
   const [fromDate, setFromDate]     = useState('');
   const [toDate, setToDate]         = useState('');
   const [viewPhoto, setViewPhoto]   = useState(null); // { url, label } | null
+  const [csvLoading, setCsvLoading] = useState(false);
 
   const PER_PAGE = 8;
 
-  const fetchSessions = () => {
-    setLoading(true); setError('');
-    const params = { page, limit: PER_PAGE };
+  // Shared by the table fetch and the export handler so the export always
+  // uses the exact same active filters as the table — status/from/to only,
+  // never page/limit (export is page-independent by design).
+  const buildFilterParams = () => {
+    const params = {};
     if (statusFilter) params.status = statusFilter;
     if (fromDate) params.from = fromDate;
     if (toDate) params.to = toDate;
+    return params;
+  };
+
+  const fetchSessions = () => {
+    setLoading(true); setError('');
+    const params = { ...buildFilterParams(), page, limit: PER_PAGE };
     sessionAPI.getAll(params)
       .then(r => {
         setSessions(r.data.sessions || []);
@@ -78,6 +94,22 @@ export default function Records() {
     setStatusFilter(''); setFromDate(''); setToDate(''); setPage(1);
   };
 
+  // Fetches the COMPLETE filtered dataset from the backend (export=csv, no
+  // pagination ceiling) — never the currently-loaded page — so the result
+  // is identical regardless of which page the table happens to be showing.
+  const handleExportCSV = async () => {
+    if (csvLoading) return;
+    setCsvLoading(true); setError('');
+    try {
+      const res = await sessionAPI.exportAll(buildFilterParams());
+      exportCSV(res.data.sessions || []);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Could not export CSV');
+    } finally {
+      setCsvLoading(false);
+    }
+  };
+
   const totalPages = pagination.totalPages || 1;
   const linkedCount = sessions.filter(s => s.measurement.status === 'linked').length;
   const diffsOnPage = sessions.map(s => s.measurement.difference).filter(d => d != null);
@@ -91,8 +123,8 @@ export default function Records() {
         title="Weighing History"
         subtitle="Real seed packet measurements from SeedBatch → SeedPacket → WeightSession"
         actions={
-          <Button variant="outlined" startIcon={<DownloadIcon />} onClick={() => exportCSV(sessions)}
-            sx={{ borderRadius: 2, borderColor: '#e2e8f0', color: '#475569' }}>Export CSV</Button>
+          <Button variant="outlined" startIcon={<DownloadIcon />} onClick={handleExportCSV} disabled={csvLoading}
+            sx={{ borderRadius: 2, borderColor: '#e2e8f0', color: '#475569' }}>{csvLoading ? 'Exporting...' : 'Export CSV'}</Button>
         }
       />
 

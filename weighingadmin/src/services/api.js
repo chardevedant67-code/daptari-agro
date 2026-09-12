@@ -1,7 +1,12 @@
 import axios from 'axios';
 
+// Backend origin — VITE_API_URL lets a production build (Render, etc.) point
+// at its real deployed backend; local dev keeps working unchanged since the
+// var is unset there and this falls back to the same localhost:5001 as before.
+export const API_ORIGIN = import.meta.env.VITE_API_URL || 'http://localhost:5001';
+
 const api = axios.create({
-  baseURL: 'http://localhost:5001/api',
+  baseURL: `${API_ORIGIN}/api`,
   headers: { 'Content-Type': 'application/json' },
 });
 
@@ -30,6 +35,11 @@ export const authAPI = {
   login:  (data) => api.post('/auth/login', data),
   me:     ()     => api.get('/auth/me'),
   logout: ()     => api.post('/auth/logout'),
+  // Always resolves with the same generic { success, message } shape
+  // regardless of whether the email belongs to an account — never branch
+  // UI behavior on its content beyond showing it.
+  forgotPassword: (email)            => api.post('/auth/forgot-password', { email }),
+  resetPassword:  (token, password)  => api.post('/auth/reset-password', { token, password }),
 };
 
 // ── Products ──────────────────────────────────────
@@ -39,7 +49,7 @@ export const productAPI = {
   getOne:  (id)           => api.get(`/products/${id}`),
   update:  (id, data)     => api.put(`/products/${id}`, data),
   delete:  (id)           => api.delete(`/products/${id}`),
-  qrUrl:   (id)           => `http://localhost:5001/api/products/${id}/qr`,
+  qrUrl:   (id)           => `${API_ORIGIN}/api/products/${id}/qr`,
 };
 
 // ── Records ───────────────────────────────────────
@@ -67,6 +77,9 @@ export const dashboardAPI = {
 // Never reads the legacy WeightRecord collection.
 export const sessionAPI = {
   getAll: (params) => api.get('/sessions', { params }),
+  // Complete filtered dataset for CSV/Excel export — same filters as
+  // getAll, but never paginated (backend returns every matching session).
+  exportAll: (params) => api.get('/sessions', { params: { ...params, export: 'csv' } }),
 };
 
 // ── Batches ───────────────────────────────────────
@@ -75,7 +88,10 @@ export const batchAPI = {
   getAll:   ()     => api.get('/batches'),
   getOne:   (id)   => api.get(`/batches/${id}`),
   qrList:   (id)   => api.get(`/batches/${id}/qr-list`),
-  qrBaseUrl: ()    => 'http://localhost:5001',
+  qrBaseUrl: ()    => API_ORIGIN,
+  // Product Inventory filtering (Seed/Batch/Warehouse) — reads real
+  // SeedBatch/SeedPacket data only, never the legacy Product collection.
+  inventory: (params) => api.get('/batches/inventory', { params }),
 };
 
 // ── Admin ─────────────────────────────────────────
@@ -85,6 +101,20 @@ export const adminAPI = {
   update:         (id, d)  => api.put(`/admin/${id}`, d),
   delete:         (id)     => api.delete(`/admin/${id}`),
   changePassword: (data)   => api.put('/admin/change-password', data),
+};
+
+// ── User / Operator management ───────────────────
+// Admin-protected (superadmin), targets the real User collection that
+// WeightSession/SeedPacket.operator reference — separate from adminAPI
+// above, which manages Admin/back-office accounts.
+export const userAdminAPI = {
+  getAll:      ()               => api.get('/user/admin/all'),
+  create:      (data)           => api.post('/user/admin/create', data),
+  update:      (id, d)          => api.put(`/user/admin/${id}`, d),
+  delete:      (id)             => api.delete(`/user/admin/${id}`),
+  // Admin-mediated recovery for a locked-out operator (Step 9A Option 1 —
+  // mobile Users have no self-service reset flow).
+  setPassword: (id, password)   => api.put(`/user/admin/${id}/password`, { password }),
 };
 
 export default api;

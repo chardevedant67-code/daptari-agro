@@ -2,6 +2,7 @@ require('dotenv').config();
 const Admin = require('./models/Admin');
 const Machine = require('./models/Machine');
 const connectDB = require('./config/db');
+const { requireEnv } = require('./utils/requireEnv');
 
 const MACHINES = [
   { machineId: 'MAC-001', name: 'Industrial Scale XS-200', line: 'Packing Line A', location: 'Bay 1', category: 'packing',  status: 'Running',     efficiency: 98, runtime: 18.5 },
@@ -12,23 +13,30 @@ const MACHINES = [
 ];
 
 const seed = async () => {
+  // Bootstrap credentials must be explicit — validated before any MongoDB
+  // connection is attempted, and never given a hardcoded fallback.
+  const adminEmail       = requireEnv('SEEDER_ADMIN_EMAIL');
+  const adminPassword    = requireEnv('SEEDER_ADMIN_PASSWORD');
+  const operatorEmail    = requireEnv('SEEDER_OPERATOR_EMAIL');
+  const operatorPassword = requireEnv('SEEDER_OPERATOR_PASSWORD');
+
   await connectDB();
 
   // Seed SuperAdmin
-  const existing = await Admin.findOne({ email: 'superadmin@induscore.com' });
+  const existing = await Admin.findOne({ email: adminEmail });
   if (!existing) {
-    await Admin.create({ name: 'Super Admin', email: 'superadmin@induscore.com', password: 'Admin@1234', role: 'superadmin', isActive: true });
-    console.log('✅ SuperAdmin seeded: superadmin@induscore.com / Admin@1234');
+    await Admin.create({ name: 'Super Admin', email: adminEmail, password: adminPassword, role: 'superadmin', isActive: true });
+    console.log(`✅ SuperAdmin seeded: ${adminEmail}`);
   } else {
     console.log('⚠️  SuperAdmin already exists — skipping');
   }
 
   // Seed default Operator user (for mobile app)
   const User = require('./models/User');
-  const existingUser = await User.findOne({ email: 'operator@induscore.com' });
+  const existingUser = await User.findOne({ email: operatorEmail });
   if (!existingUser) {
-    await User.create({ name: 'Operator', email: 'operator@induscore.com', password: 'Operator@1234', role: 'operator', isActive: true });
-    console.log('✅ Operator seeded: operator@induscore.com / Operator@1234');
+    await User.create({ name: 'Operator', email: operatorEmail, password: operatorPassword, role: 'operator', isActive: true });
+    console.log(`✅ Operator seeded: ${operatorEmail}`);
   } else {
     console.log('⚠️  Operator already exists — skipping');
   }

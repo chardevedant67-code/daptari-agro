@@ -5,7 +5,22 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
 const connectDB = require('./config/db');
+const { requireEnv } = require('./utils/requireEnv');
 const app = express();
+
+// Fail fast if JWT_SECRET is missing: without this, the server would still
+// boot and pass health checks, but every login/auth request would throw the
+// moment jwt.sign()/jwt.verify() is actually called (see authController.js,
+// userAuthController.js, authMiddleware.js, userAuthMiddleware.js). Checked
+// before connectDB() so a misconfigured deploy never even opens a DB
+// connection.
+requireEnv('JWT_SECRET');
+
+// Render sits its own reverse proxy in front of this service — without this,
+// req.ip would resolve to that proxy's address for every request, making
+// any IP-based rate limiting either non-functional or a single shared
+// bucket for all traffic. Must be set before any middleware reads req.ip.
+app.set('trust proxy', 1);
 
 // Custom URL rewriting and logging middleware
 app.use((req, res, next) => {
@@ -21,17 +36,26 @@ connectDB();
 
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
+  ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()).filter(Boolean)
   : [];
+
+// The localhost/192.168.x.x/10.x.x.x auto-trust below is a development
+// convenience only — it must never apply in production, where a browser
+// origin may be accepted ONLY via an explicit, exact match in
+// ALLOWED_ORIGINS. Native mobile/server-to-server requests send no Origin
+// header at all (`!origin`) and are unaffected by this either way.
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
 app.use(cors({
   origin: (origin, callback) => {
     if (
       !origin ||
       ALLOWED_ORIGINS.includes(origin) ||
-      /^https?:\/\/localhost:\d+$/.test(origin) ||
-      /^http:\/\/192\.168\.\d+\.\d+:\d+$/.test(origin) ||
-      /^http:\/\/10\.\d+\.\d+\.\d+:\d+$/.test(origin)
+      (!IS_PRODUCTION && (
+        /^https?:\/\/localhost:\d+$/.test(origin) ||
+        /^http:\/\/192\.168\.\d+\.\d+:\d+$/.test(origin) ||
+        /^http:\/\/10\.\d+\.\d+\.\d+:\d+$/.test(origin)
+      ))
     ) {
       callback(null, true);
     } else {

@@ -73,6 +73,22 @@ def enableProguardInReleaseBuilds = false
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+/**
+ * Release signing must come from a private, git-ignored keystore.properties
+ * file (see keystore.properties.example) — release must NEVER fall back to
+ * the debug keystore. If the file or any required key is missing, release
+ * signing is left unconfigured here and the taskGraph check below fails any
+ * release build with a clear error instead of silently signing with debug.
+ */
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def releaseKeystoreKeys = ["storeFile", "storePassword", "keyAlias", "keyPassword"]
+def keystoreProperties = new Properties()
+def releaseSigningReady = false
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+    releaseSigningReady = releaseKeystoreKeys.every { keystoreProperties.getProperty(it) }
+}
+
 android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
@@ -96,6 +112,14 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        release {
+            if (releaseSigningReady) {
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
+        }
     }
     buildTypes {
         debug {
@@ -103,13 +127,29 @@ android {
             manifestPlaceholders = [usesCleartextTraffic: "true"]
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            // Release is signed ONLY from android/keystore.properties (private
+            // release keystore). It must never fall back to signingConfigs.debug.
+            // See the taskGraph.whenReady check below for the fail-closed guard.
+            signingConfig signingConfigs.release
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
             manifestPlaceholders = [usesCleartextTraffic: "true"]
         }
+    }
+}
+
+// Fail-closed release signing guard: if any release-named task is requested
+// while releaseSigningReady is false, fail immediately with a clear error
+// instead of letting AGP silently produce an unsigned or debug-signed APK.
+gradle.taskGraph.whenReady { taskGraph ->
+    def buildingRelease = taskGraph.allTasks.any { it.name.toLowerCase().contains("release") }
+    if (buildingRelease && !releaseSigningReady) {
+        throw new GradleException(
+            "Release signing configuration missing or incomplete.\n" +
+            "Create android/keystore.properties (see android/keystore.properties.example) " +
+            "with storeFile, storePassword, keyAlias, and keyPassword before building a release variant.\n" +
+            "Release builds must never fall back to the debug keystore."
+        )
     }
 }
 

@@ -1,36 +1,50 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  Box, Button, TextField, Typography, Alert, Link, Divider
+  Box, Button, TextField, Typography, Alert, Divider
 } from '@mui/material';
 import QrCodeIcon from '@mui/icons-material/QrCode';
-import MarkEmailReadIcon from '@mui/icons-material/MarkEmailRead';
+import LockResetIcon from '@mui/icons-material/LockReset';
 import VerifiedIcon from '@mui/icons-material/Verified';
 import SecurityIcon from '@mui/icons-material/Security';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { authAPI } from '../services/api';
 
-export default function ForgotPassword() {
+export default function ResetPassword() {
   const navigate = useNavigate();
-  const [email, setEmail] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [success, setSuccess] = useState(false);
-  const [error, setError] = useState('');
+  const [searchParams] = useSearchParams();
+  const token = searchParams.get('token') || '';
+
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm]   = useState('');
+  const [loading, setLoading]   = useState(false);
+  const [success, setSuccess]   = useState(false);
+  const [error, setError]       = useState('');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (loading) return;
-    setLoading(true); setError('');
+    setError('');
+
+    if (!token) {
+      setError('This reset link is missing its token. Please request a new password reset link.');
+      return;
+    }
+    if (password.length < 6) {
+      setError('Password must be at least 6 characters.');
+      return;
+    }
+    if (password !== confirm) {
+      setError('Passwords do not match.');
+      return;
+    }
+
+    setLoading(true);
     try {
-      // Backend always returns the same generic response whether or not the
-      // email belongs to an account — never branch UI behavior on its
-      // content beyond showing the same success state either way.
-      await authAPI.forgotPassword(email);
+      await authAPI.resetPassword(token, password);
       setSuccess(true);
-    } catch {
-      // A real network/server failure only — never a "does this email
-      // exist" signal, since the backend itself never sends one.
-      setError('Something went wrong. Please try again in a moment.');
+    } catch (err) {
+      setError(err.response?.data?.message || 'This reset link is invalid or has expired. Please request a new one.');
     } finally {
       setLoading(false);
     }
@@ -38,13 +52,12 @@ export default function ForgotPassword() {
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
-      {/* Left Branding Panel */}
+      {/* Left Branding Panel — matches ForgotPassword.jsx layout */}
       <Box sx={{
         flex: 1, display: { xs: 'none', md: 'flex' }, flexDirection: 'column',
         background: 'linear-gradient(145deg, #0f1550 0%, #1a227f 50%, #3d47a3 100%)',
         alignItems: 'center', justifyContent: 'center', px: 6, position: 'relative', overflow: 'hidden'
       }}>
-        {/* Background circles */}
         <Box sx={{ position: 'absolute', top: -80, right: -80, width: 300, height: 300, borderRadius: '50%', background: 'rgba(255,255,255,0.04)' }} />
         <Box sx={{ position: 'absolute', bottom: -60, left: -60, width: 240, height: 240, borderRadius: '50%', background: 'rgba(255,255,255,0.04)' }} />
 
@@ -102,22 +115,28 @@ export default function ForgotPassword() {
 
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 5 }}>
               <Box sx={{ width: 36, height: 36, borderRadius: 2, background: 'linear-gradient(135deg,#1a227f,#3d47a3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <MarkEmailReadIcon sx={{ color: '#fff', fontSize: 18 }} />
+                <LockResetIcon sx={{ color: '#fff', fontSize: 18 }} />
               </Box>
-              <Typography sx={{ fontWeight: 800, fontSize: 15, color: '#0f172a' }}>Password Recovery</Typography>
+              <Typography sx={{ fontWeight: 800, fontSize: 15, color: '#0f172a' }}>Password Reset</Typography>
             </Box>
 
             {!success ? (
               <>
-                <Typography variant="h5" sx={{ fontWeight: 800, color: '#0f172a', mb: 1 }}>Forgot password?</Typography>
+                <Typography variant="h5" sx={{ fontWeight: 800, color: '#0f172a', mb: 1 }}>Set a new password</Typography>
                 <Typography sx={{ color: '#64748b', fontSize: 14, mb: 4 }}>
-                  Enter the email address associated with your account and we'll send you a link to reset your password.
+                  Choose a new password for your account. It must be at least 6 characters.
                 </Typography>
 
                 <Box component="form" onSubmit={handleSubmit}>
                   <TextField
-                    fullWidth label="Email address" type="email" required
-                    value={email} onChange={e => setEmail(e.target.value)}
+                    fullWidth label="New password" type="password" required
+                    value={password} onChange={e => setPassword(e.target.value)}
+                    sx={{ mb: 2 }}
+                    InputProps={{ sx: { borderRadius: 2, background: '#fff' } }}
+                  />
+                  <TextField
+                    fullWidth label="Confirm new password" type="password" required
+                    value={confirm} onChange={e => setConfirm(e.target.value)}
                     sx={{ mb: 3 }}
                     InputProps={{ sx: { borderRadius: 2, background: '#fff' } }}
                   />
@@ -129,28 +148,28 @@ export default function ForgotPassword() {
                     disabled={loading}
                     sx={{ borderRadius: 2, py: 1.5, fontWeight: 700, fontSize: 15, background: 'linear-gradient(135deg,#1a227f,#3d47a3)' }}
                   >
-                    {loading ? 'Sending Link...' : 'Send Recovery Link'}
+                    {loading ? 'Resetting...' : 'Reset Password'}
                   </Button>
                 </Box>
               </>
             ) : (
               <Box sx={{ textAlign: 'center' }}>
-                <Box sx={{ 
-                  width: 64, height: 64, borderRadius: '50%', background: '#dcfce7', 
+                <Box sx={{
+                  width: 64, height: 64, borderRadius: '50%', background: '#dcfce7',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', mx: 'auto', mb: 3
                 }}>
                   <VerifiedIcon sx={{ color: '#16a34a', fontSize: 32 }} />
                 </Box>
-                <Typography variant="h5" sx={{ fontWeight: 800, color: '#0f172a', mb: 1 }}>Email Sent!</Typography>
+                <Typography variant="h5" sx={{ fontWeight: 800, color: '#0f172a', mb: 1 }}>Password reset!</Typography>
                 <Typography sx={{ color: '#64748b', fontSize: 14, mb: 4 }}>
-                  We've sent a password recovery link to <strong>{email}</strong>. Please check your inbox and follow the instructions.
+                  Your password has been changed successfully. You can now sign in with your new password.
                 </Typography>
                 <Button
                   variant="outlined" fullWidth
                   onClick={() => navigate('/login')}
                   sx={{ borderRadius: 2, py: 1.2, fontWeight: 700, borderColor: '#cbd5e1', color: '#0f172a' }}
                 >
-                  Return to Sign In
+                  Go to Sign In
                 </Button>
               </Box>
             )}
@@ -159,12 +178,6 @@ export default function ForgotPassword() {
           <Divider sx={{ my: 3 }}>
             <Typography sx={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>FOR AUTHORIZED PERSONNEL ONLY</Typography>
           </Divider>
-
-          <Box sx={{ p: 2, background: 'rgba(26,34,127,0.04)', borderRadius: 2, border: '1px solid rgba(26,34,127,0.1)' }}>
-            <Typography sx={{ fontSize: 12, color: '#64748b', textAlign: 'center' }}>
-              If you don't receive the email within 5 minutes, please check your spam folder or contact support.
-            </Typography>
-          </Box>
         </Box>
       </Box>
     </Box>

@@ -1,15 +1,24 @@
 require('dotenv').config();
 const Admin = require('./models/Admin');
 const connectDB = require('./config/db');
+const { requireEnv } = require('./utils/requireEnv');
 
 const User = require('./models/User');
 
 const reset = async () => {
+  // Which account gets reset, and to what password, must always be an
+  // explicit, deliberate choice — validated before any MongoDB connection,
+  // never a hardcoded default. This never silently changes which account
+  // the script targets: an unset var aborts, it never falls back to a
+  // different identity.
+  const adminEmail    = requireEnv('RESET_ADMIN_EMAIL');
+  const adminPassword = requireEnv('RESET_ADMIN_PASSWORD');
+  const opEmail    = requireEnv('RESET_OPERATOR_EMAIL');
+  const opPassword = requireEnv('RESET_OPERATOR_PASSWORD');
+
   await connectDB();
-  
+
   // Admin
-  const adminEmail = 'superadmin@induscore.com';
-  const adminPassword = 'Admin@1234';
   let admin = await Admin.findOne({ email: adminEmail });
   if (admin) {
     admin.password = adminPassword;
@@ -21,8 +30,6 @@ const reset = async () => {
   }
 
   // Operator
-  const opEmail = 'operator@induscore.com';
-  const opPassword = 'Operator@1234';
   let user = await User.findOne({ email: opEmail });
   if (user) {
     user.password = opPassword;
