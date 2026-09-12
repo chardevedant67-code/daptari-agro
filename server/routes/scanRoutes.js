@@ -2,6 +2,7 @@ const express    = require('express');
 const router     = express.Router();
 const SeedPacket = require('../models/SeedPacket');
 const Product    = require('../models/Product');
+const { sendServerError, logServerError } = require('../utils/errorResponse');
 
 // GET /p/api/:productId — public Product lookup used by the mobile QR scanner
 // (fetchProductByScan in weighingqrauto/src/services/api.js). Registered
@@ -17,7 +18,7 @@ router.get('/api/:productId', async (req, res) => {
 
     res.json({ success: true, product });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'scanRoutes /api/:productId');
   }
 });
 
@@ -30,7 +31,8 @@ router.get('/:uniqueId', async (req, res) => {
     if (!packet) return res.status(404).send(page404(req.params.uniqueId));
     res.send(pageHTML(packet));
   } catch (err) {
-    res.status(500).send(`<h2>Server error: ${err.message}</h2>`);
+    logServerError('scanRoutes /:uniqueId', err);
+    res.status(500).send('<h2>Server error — please try again.</h2>');
   }
 });
 

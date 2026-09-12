@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { sendServerError } = require('../utils/errorResponse');
 
 const signToken = (id) =>
   jwt.sign({ id, type: 'user' }, process.env.JWT_SECRET, {
@@ -13,26 +14,53 @@ const userPublic = (user) => ({
   role: user.role,
 });
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 // POST /api/user/register
 const register = async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password } = req.body || {};
 
-    if (!name || !email || !password) {
+    // name/email/password must be plain strings before anything downstream
+    // (the Mongo query in particular) ever sees them — an object/array (e.g.
+    // { $regex: 'a' } or { $ne: null }) would otherwise reach
+    // User.findOne() below as a query operator instead of a value. Mirrors
+    // the same guard authController.js's Admin login already uses.
+    if (typeof name !== 'string' || typeof email !== 'string' || typeof password !== 'string') {
       return res.status(400).json({ success: false, message: 'Name, email and password are required' });
     }
 
-    const exists = await User.findOne({ email });
+    const trimmedName = name.trim();
+    const normalizedEmail = email.trim().toLowerCase();
+
+    if (!trimmedName || !normalizedEmail || !password) {
+      return res.status(400).json({ success: false, message: 'Name, email and password are required' });
+    }
+
+    if (!EMAIL_RE.test(normalizedEmail)) {
+      return res.status(400).json({ success: false, message: 'Enter a valid email address' });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 6 characters' });
+    }
+
+    // Normalized (lowercased/trimmed) so this duplicate check actually
+    // matches what the schema's own `lowercase: true` will store — an
+    // unnormalized check here previously let two case-variant emails both
+    // pass this lookup and only collide later at User.create() as a raw,
+    // unfriendly Mongo E11000 error.
+    const exists = await User.findOne({ email: normalizedEmail });
     if (exists) {
       return res.status(400).json({ success: false, message: 'Email already registered' });
     }
 
-    const user = await User.create({ name, email, password });
+    const user = await User.create({ name: trimmedName, email: normalizedEmail, password });
     const token = signToken(user._id);
 
     res.status(201).json({ success: true, token, user: userPublic(user) });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'userAuthController');
   }
 };
 
@@ -60,7 +88,7 @@ const login = async (req, res) => {
     const token = signToken(user._id);
     res.json({ success: true, token, user: userPublic(user) });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'userAuthController');
   }
 };
 
@@ -70,7 +98,7 @@ const getMe = async (req, res) => {
     const user = await User.findById(req.user._id);
     res.json({ success: true, user: userPublic(user) });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'userAuthController');
   }
 };
 

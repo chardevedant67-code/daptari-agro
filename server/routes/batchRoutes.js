@@ -4,7 +4,9 @@ const QRCode   = require('qrcode');
 const SeedBatch  = require('../models/SeedBatch');
 const SeedPacket = require('../models/SeedPacket');
 const { protect } = require('../middleware/authMiddleware');
+const { allowRoles } = require('../middleware/roleMiddleware');
 const { uploadQrPng, deleteQrFile } = require('../utils/qrStorage');
+const { sendServerError } = require('../utils/errorResponse');
 
 // Public base URL that gets encoded into every packet's QR code (the
 // /scan/:uniqueId destination a phone opens on scan) — NOT the qrCodeUrl
@@ -35,8 +37,13 @@ function resolveQrBaseUrl() {
   return `http://${host}:${port}`;
 }
 
-// POST /api/batches — create batch + bulk QR generation
-router.post('/', protect, async (req, res) => {
+// POST /api/batches — create batch + bulk QR generation. Mutating/
+// privileged operation — matches the same allowRoles('superadmin','admin')
+// convention already used for the equivalent create routes in
+// productRoutes.js and machineRoutes.js. Without this, any authenticated
+// Admin — including the lowest-privilege Admin role, 'operator' — could
+// create batches of up to 5000 packets with no role check at all.
+router.post('/', protect, allowRoles('superadmin', 'admin'), async (req, res) => {
   try {
     const { batchName, seedType, seedCategory, seedCode, batchNumber, batchCode, count, month, year, warehouse, rack, shelf } = req.body;
 
@@ -138,7 +145,7 @@ router.post('/', protect, async (req, res) => {
       packets: created.map(p => ({ uniqueId: p.uniqueId, qrCodeUrl: p.qrCodeUrl })),
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'batchRoutes');
   }
 });
 
@@ -166,7 +173,7 @@ router.get('/', protect, async (req, res) => {
 
     res.json({ success: true, batches: withCounts });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'batchRoutes');
   }
 });
 
@@ -261,7 +268,7 @@ router.get('/inventory', protect, async (req, res) => {
       pagination: { page, limit, total: counts.totalProducts, totalPages },
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'batchRoutes');
   }
 });
 
@@ -273,7 +280,7 @@ router.get('/:id/qr-list', protect, async (req, res) => {
       .sort({ uniqueId: 1 });
     res.json({ success: true, packets });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'batchRoutes');
   }
 });
 
@@ -292,7 +299,7 @@ router.get('/:id', protect, async (req, res) => {
       .sort({ uniqueId: 1 });
     res.json({ success: true, batch, packets });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'batchRoutes');
   }
 });
 

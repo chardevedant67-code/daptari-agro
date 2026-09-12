@@ -1,4 +1,5 @@
 const Admin = require('../models/Admin');
+const { sendServerError } = require('../utils/errorResponse');
 
 // GET /api/admin/all — superadmin only
 const getAllAdmins = async (req, res) => {
@@ -6,7 +7,7 @@ const getAllAdmins = async (req, res) => {
     const admins = await Admin.find().select('-password').sort({ createdAt: -1 });
     res.json({ success: true, count: admins.length, admins });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'adminController');
   }
 };
 
@@ -28,7 +29,7 @@ const createAdmin = async (req, res) => {
       admin: { id: admin._id, name: admin.name, email: admin.email, role: admin.role },
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'adminController');
   }
 };
 
@@ -48,7 +49,7 @@ const updateAdmin = async (req, res) => {
 
     res.json({ success: true, message: 'Admin updated', admin });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'adminController');
   }
 };
 
@@ -66,7 +67,7 @@ const deleteAdmin = async (req, res) => {
 
     res.json({ success: true, message: 'Admin deleted' });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'adminController');
   }
 };
 
@@ -81,11 +82,16 @@ const changePassword = async (req, res) => {
     }
 
     admin.password = newPassword;
+    // Invalidates every JWT issued before this instant — see
+    // middleware/authMiddleware.js. Matches passwordResetController.js's
+    // resetPassword, which already sets this; self-service change-password
+    // was the one Admin password-mutation path missing it.
+    admin.passwordChangedAt = new Date();
     await admin.save();
 
     res.json({ success: true, message: 'Password changed successfully' });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'adminController');
   }
 };
 

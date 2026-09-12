@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const Admin = require('../models/Admin');
+const { sendServerError } = require('../utils/errorResponse');
 
 // Bounded fallbacks ('7d'/'30d') so a missing JWT_EXPIRE/JWT_EXPIRE_LONG can
 // never result in expiresIn being undefined — jsonwebtoken treats that as
@@ -53,7 +54,7 @@ const login = async (req, res) => {
       },
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'authController');
   }
 };
 
@@ -73,7 +74,7 @@ const getMe = async (req, res) => {
       },
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'authController');
   }
 };
 

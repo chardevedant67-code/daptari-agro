@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const WeightRecord = require('../models/WeightRecord');
 const { protect } = require('../middleware/authMiddleware');
+const { sendServerError } = require('../utils/errorResponse');
 
 router.use(protect);
 
@@ -34,7 +35,7 @@ router.get('/', async (req, res) => {
     const total = await WeightRecord.countDocuments(filter);
     res.json({ success: true, count: total, totalPages: Math.ceil(total / limit), currentPage: Number(page), records });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'recordRoutes');
   }
 });
 
@@ -55,7 +56,7 @@ router.post('/', async (req, res) => {
     await record.populate('operator', 'name');
     res.status(201).json({ success: true, message: 'Record saved', record });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'recordRoutes');
   }
 });
 
@@ -65,7 +66,7 @@ router.delete('/:id', async (req, res) => {
     await WeightRecord.findByIdAndDelete(req.params.id);
     res.json({ success: true, message: 'Record deleted' });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'recordRoutes');
   }
 });
 

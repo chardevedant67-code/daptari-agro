@@ -8,6 +8,7 @@ const SeedBatch = require('../models/SeedBatch');
 const SeedPacket = require('../models/SeedPacket');
 const WeightSession = require('../models/WeightSession');
 const { protect } = require('../middleware/authMiddleware');
+const { sendServerError } = require('../utils/errorResponse');
 
 router.use(protect);
 
@@ -70,7 +71,7 @@ router.get('/stats', async (req, res) => {
       },
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'dashboardRoutes');
   }
 });
 

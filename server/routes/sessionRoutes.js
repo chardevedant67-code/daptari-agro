@@ -10,6 +10,7 @@ const { uploadSeedPacketPhoto } = require('../utils/cloudinaryUpload');
 const { protectUser } = require('../middleware/userAuthMiddleware');
 const { protectAdminOrUser } = require('../middleware/authMiddleware');
 const { sessionCreateLimiter, sessionMutationLimiter } = require('../middleware/rateLimiter');
+const { sendServerError } = require('../utils/errorResponse');
 
 // Every mutation route below requires `protectUser` — a real, active User
 // account (verified against the User collection, not just a JWT signed with
@@ -31,12 +32,39 @@ const SESSION_FORBIDDEN = { success: false, code: 'SESSION_FORBIDDEN', message: 
 const photoDir = path.join(__dirname, '..', 'uploads', 'session-photos');
 if (!fs.existsSync(photoDir)) fs.mkdirSync(photoDir, { recursive: true });
 
+// Same expected format set as uploadMiddleware.js (product images) — the
+// mobile app only ever sends image/jpeg, image/png, or image/webp (see
+// weighingqrauto/src/services/api.js's uploadSessionPhoto). Checked against
+// BOTH the declared MIME type and the file extension, so a mismatched pair
+// (e.g. a .txt renamed to "photo.jpg", or an image/jpeg header on a
+// "malware.exe" filename) is rejected. This is NOT magic-byte/content-
+// signature validation — it only catches a spoofed extension or a spoofed
+// Content-Type alone, not both spoofed consistently together.
+const ALLOWED_PHOTO_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/jpg'];
+const ALLOWED_PHOTO_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'];
+
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, photoDir),
     filename:    (_req, file, cb) => cb(null, `sess_${Date.now()}${path.extname(file.originalname)}`),
   }),
   limits: { fileSize: 15 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    const mimeOk = ALLOWED_PHOTO_MIME_TYPES.includes(file.mimetype);
+    const extOk  = ALLOWED_PHOTO_EXTENSIONS.includes(ext);
+    if (!mimeOk || !extOk) {
+      // Silent reject (cb(null, false)), never cb(err) — keeps this inside
+      // multer's normal "no file attached" path instead of routing through
+      // Express error-handling middleware, which would otherwise risk a
+      // raw/unstyled error response. req.file simply stays undefined, and
+      // the route's existing `if (!req.file)` check below already handles
+      // that — this just gives it a more accurate message via this field.
+      req.sessionPhotoRejectReason = 'Only JPEG, PNG, or WEBP images are allowed';
+      return cb(null, false);
+    }
+    cb(null, true);
+  },
 });
 
 // POST /api/sessions — start new session
@@ -126,7 +154,7 @@ router.post('/', protectUser, sessionCreateLimiter, async (req, res) => {
       throw createErr;
     }
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'sessionRoutes');
   }
 });
 
@@ -143,17 +171,24 @@ router.post('/:id/photo', protectUser, sessionMutationLimiter, upload.single('ph
     const session = await WeightSession.findById(req.params.id);
     if (!session) return res.status(404).json({ success: false, message: 'Session not found' });
     if (isOwnedByOtherUser(session, req.user._id)) return res.status(403).json(SESSION_FORBIDDEN);
-    if (!req.file)  return res.status(400).json({ success: false, message: 'No photo uploaded' });
+    // Fast-fail before doing any (possibly slow) Cloudinary upload — the
+    // atomic write below is what actually enforces this against a race;
+    // this is purely an early exit for the common, non-racing case.
+    if (session.status !== 'active') {
+      return res.status(400).json({ success: false, code: 'SESSION_NOT_ACTIVE', message: 'This session is no longer active and cannot be modified.' });
+    }
+    if (!req.file)  return res.status(400).json({ success: false, message: req.sessionPhotoRejectReason || 'No photo uploaded' });
 
     const { uniqueId, phase } = req.body;
     const wantsCloudinary = Boolean(uniqueId) && (phase === 'before' || phase === 'after');
 
+    const patch = {};
     // The mobile app already sends uniqueId here today — capture it onto the
     // session as soon as it's known, so even an abandoned/never-linked
     // session records which packet it was for. Set once; never overwritten
     // by a later, different scan on the same session.
     if (uniqueId && !session.packetUniqueId) {
-      session.packetUniqueId = uniqueId;
+      patch.packetUniqueId = uniqueId;
     }
 
     if (wantsCloudinary) {
@@ -166,9 +201,9 @@ router.post('/:id/photo', protectUser, sessionMutationLimiter, upload.single('ph
       if (!secureUrl) {
         return res.status(503).json({ success: false, message: 'Photo storage is not configured yet' });
       }
-      if (phase === 'before') session.beforePhotoUrl = secureUrl;
-      if (phase === 'after')  session.afterPhotoUrl  = secureUrl;
-      session.photoUrl = secureUrl; // keep legacy field in sync for existing UI
+      if (phase === 'before') patch.beforePhotoUrl = secureUrl;
+      if (phase === 'after')  patch.afterPhotoUrl  = secureUrl;
+      patch.photoUrl = secureUrl; // keep legacy field in sync for existing UI
 
       // The photo now lives permanently on Cloudinary (secureUrl above) — the
       // local multer temp file was only ever a staging copy for the upload
@@ -177,19 +212,30 @@ router.post('/:id/photo', protectUser, sessionMutationLimiter, upload.single('ph
       // already safely stored.
       fs.unlink(req.file.path, () => {});
     } else {
-      session.photoUrl = `/uploads/session-photos/${req.file.filename}`;
+      patch.photoUrl = `/uploads/session-photos/${req.file.filename}`;
     }
 
-    await session.save();
+    // Status re-asserted atomically at the point of write — closes the
+    // window between the read above and this update where a concurrent
+    // /link (or cancel) could have changed the session out from under us.
+    // A linked/cancelled session can never be mutated here, race or not.
+    const updated = await WeightSession.findOneAndUpdate(
+      { _id: session._id, status: 'active', operator: { $in: [null, req.user._id] } },
+      { $set: patch },
+      { new: true }
+    );
+    if (!updated) {
+      return res.status(400).json({ success: false, code: 'SESSION_NOT_ACTIVE', message: 'This session is no longer active and cannot be modified.' });
+    }
 
     res.json({
       success: true,
-      photoUrl: session.photoUrl,
-      beforePhotoUrl: session.beforePhotoUrl,
-      afterPhotoUrl: session.afterPhotoUrl,
+      photoUrl: updated.photoUrl,
+      beforePhotoUrl: updated.beforePhotoUrl,
+      afterPhotoUrl: updated.afterPhotoUrl,
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'sessionRoutes');
   }
 });
 
@@ -209,15 +255,25 @@ router.post('/:id/before-weight', protectUser, sessionMutationLimiter, async (re
 
     if (weight == null) return res.status(400).json({ success: false, message: 'No weight available' });
 
-    session.beforeWeight = Number(weight);
-    session.beforeTime   = new Date();
+    const patch = { beforeWeight: Number(weight), beforeTime: new Date() };
     // deviceId is optional and only stored if the caller actually sends one.
-    if (req.body.deviceId) session.deviceId = req.body.deviceId;
-    await session.save();
+    if (req.body.deviceId) patch.deviceId = req.body.deviceId;
 
-    res.json({ success: true, beforeWeight: session.beforeWeight, beforeTime: session.beforeTime });
+    // Status re-asserted atomically at the point of write — closes the
+    // window between the read above and this update where a concurrent
+    // /link (or cancel) could have changed the session out from under us.
+    const updated = await WeightSession.findOneAndUpdate(
+      { _id: session._id, status: 'active', operator: { $in: [null, req.user._id] } },
+      { $set: patch },
+      { new: true }
+    );
+    if (!updated) {
+      return res.status(400).json({ success: false, code: 'SESSION_NOT_ACTIVE', message: 'This session is no longer active and cannot be modified.' });
+    }
+
+    res.json({ success: true, beforeWeight: updated.beforeWeight, beforeTime: updated.beforeTime });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'sessionRoutes');
   }
 });
 
@@ -236,25 +292,36 @@ router.post('/:id/after-weight', protectUser, sessionMutationLimiter, async (req
 
     if (weight == null) return res.status(400).json({ success: false, message: 'No weight available' });
 
-    session.afterWeight = Number(weight);
-    session.afterTime   = new Date();
+    const afterWeight = Number(weight);
+    const patch = { afterWeight, afterTime: new Date() };
     // deviceId is optional and only stored if the caller actually sends one.
-    if (req.body.deviceId) session.deviceId = req.body.deviceId;
+    if (req.body.deviceId) patch.deviceId = req.body.deviceId;
     // Difference is computed and persisted here (server-side), not left to
     // the mobile UI, so the saved record is authoritative.
     if (session.beforeWeight != null) {
-      session.difference = session.afterWeight - session.beforeWeight;
+      patch.difference = afterWeight - session.beforeWeight;
     }
-    await session.save();
+
+    // Status re-asserted atomically at the point of write — closes the
+    // window between the read above and this update where a concurrent
+    // /link (or cancel) could have changed the session out from under us.
+    const updated = await WeightSession.findOneAndUpdate(
+      { _id: session._id, status: 'active', operator: { $in: [null, req.user._id] } },
+      { $set: patch },
+      { new: true }
+    );
+    if (!updated) {
+      return res.status(400).json({ success: false, code: 'SESSION_NOT_ACTIVE', message: 'This session is no longer active and cannot be modified.' });
+    }
 
     res.json({
       success: true,
-      afterWeight: session.afterWeight,
-      afterTime: session.afterTime,
-      difference: session.difference,
+      afterWeight: updated.afterWeight,
+      afterTime: updated.afterTime,
+      difference: updated.difference,
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'sessionRoutes');
   }
 });
 
@@ -352,7 +419,7 @@ router.post('/:id/link/:uniqueId', protectUser, sessionMutationLimiter, async (r
 
     res.json({ success: true, message: 'Data linked to QR', packet: populated });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'sessionRoutes');
   }
 });
 
@@ -364,24 +431,38 @@ router.post('/:id/link/:uniqueId', protectUser, sessionMutationLimiter, async (r
 // exactly as scannable/resumable as before.
 router.post('/:id/cancel', protectUser, sessionMutationLimiter, async (req, res) => {
   try {
-    const session = await WeightSession.findById(req.params.id);
-    if (!session) {
-      return res.status(404).json({ success: false, code: 'SESSION_NOT_FOUND', message: 'Session not found' });
-    }
-    if (isOwnedByOtherUser(session, req.user._id)) return res.status(403).json(SESSION_FORBIDDEN);
-    if (session.status === 'linked') {
-      return res.status(400).json({ success: false, code: 'SESSION_ALREADY_LINKED', message: 'Cannot cancel a session that is already linked' });
-    }
-    if (session.status === 'cancelled') {
-      // Idempotent — cancelling twice is a safe no-op, not an error.
-      return res.json({ success: true, code: 'SESSION_ALREADY_CANCELLED', message: 'Session already cancelled', session });
+    // Atomic claim, same pattern as /link above: only a currently-'active'
+    // session owned by this operator (or unowned) can transition to
+    // 'cancelled' here. Without this, a plain findById -> check -> save()
+    // could let a concurrent /link that just won the race be silently
+    // reverted back to 'cancelled' by this request's blind save().
+    const claimed = await WeightSession.findOneAndUpdate(
+      { _id: req.params.id, status: 'active', operator: { $in: [null, req.user._id] } },
+      { $set: { status: 'cancelled' } },
+      { new: true }
+    );
+
+    if (claimed) {
+      return res.json({ success: true, message: 'Session cancelled', session: claimed });
     }
 
-    session.status = 'cancelled';
-    await session.save();
-    res.json({ success: true, message: 'Session cancelled', session });
+    // Didn't match — re-read (read-only, nothing mutated here) purely to
+    // report the specific reason, same pattern as /link's failure path.
+    const current = await WeightSession.findById(req.params.id);
+    if (!current) {
+      return res.status(404).json({ success: false, code: 'SESSION_NOT_FOUND', message: 'Session not found' });
+    }
+    if (isOwnedByOtherUser(current, req.user._id)) return res.status(403).json(SESSION_FORBIDDEN);
+    if (current.status === 'linked') {
+      return res.status(400).json({ success: false, code: 'SESSION_ALREADY_LINKED', message: 'Cannot cancel a session that is already linked' });
+    }
+    if (current.status === 'cancelled') {
+      // Idempotent — cancelling twice is a safe no-op, not an error.
+      return res.json({ success: true, code: 'SESSION_ALREADY_CANCELLED', message: 'Session already cancelled', session: current });
+    }
+    return res.status(409).json({ success: false, message: 'Could not cancel session — please try again' });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'sessionRoutes');
   }
 });
 
@@ -405,7 +486,7 @@ router.get('/:id', protectAdminOrUser, async (req, res) => {
     await session.populate('operator', 'name');
     res.json({ success: true, session });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'sessionRoutes');
   }
 });
 
@@ -541,7 +622,7 @@ router.get('/', protectAdminOrUser, async (req, res) => {
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 0 },
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'sessionRoutes');
   }
 });
 

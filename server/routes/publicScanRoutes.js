@@ -1,6 +1,7 @@
 const express    = require('express');
 const router     = express.Router();
 const SeedPacket = require('../models/SeedPacket');
+const { logServerError } = require('../utils/errorResponse');
 
 // GET /scan/:uniqueId  — public HTML page shown when QR is scanned by any phone
 router.get('/:uniqueId', async (req, res) => {
@@ -10,7 +11,8 @@ router.get('/:uniqueId', async (req, res) => {
     if (!packet) return res.status(404).send(page404(req.params.uniqueId));
     res.send(pageHTML(packet));
   } catch (err) {
-    res.status(500).send(`<h2>Server error: ${escapeHtml(err.message)}</h2>`);
+    logServerError('publicScanRoutes /:uniqueId', err);
+    res.status(500).send('<h2>Server error — please try again.</h2>');
   }
 });
 

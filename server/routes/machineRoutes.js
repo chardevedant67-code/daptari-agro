@@ -3,6 +3,7 @@ const router = express.Router();
 const Machine = require('../models/Machine');
 const { protect } = require('../middleware/authMiddleware');
 const { allowRoles } = require('../middleware/roleMiddleware');
+const { sendServerError } = require('../utils/errorResponse');
 
 router.use(protect);
 
@@ -16,7 +17,7 @@ router.get('/', async (req, res) => {
     const machines = await Machine.find(filter).sort({ machineId: 1 });
     res.json({ success: true, count: machines.length, machines });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'machineRoutes');
   }
 });
 
@@ -27,7 +28,7 @@ router.get('/:id', async (req, res) => {
     if (!machine) return res.status(404).json({ success: false, message: 'Machine not found' });
     res.json({ success: true, machine });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'machineRoutes');
   }
 });
 
@@ -37,7 +38,7 @@ router.post('/', allowRoles('superadmin', 'admin'), async (req, res) => {
     const machine = await Machine.create(req.body);
     res.status(201).json({ success: true, message: 'Machine added', machine });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'machineRoutes');
   }
 });
 
@@ -48,7 +49,7 @@ router.put('/:id', allowRoles('superadmin', 'admin'), async (req, res) => {
     if (!machine) return res.status(404).json({ success: false, message: 'Machine not found' });
     res.json({ success: true, message: 'Machine updated', machine });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'machineRoutes');
   }
 });
 
@@ -58,7 +59,7 @@ router.delete('/:id', allowRoles('superadmin'), async (req, res) => {
     await Machine.findByIdAndDelete(req.params.id);
     res.json({ success: true, message: 'Machine deleted' });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'machineRoutes');
   }
 });
 

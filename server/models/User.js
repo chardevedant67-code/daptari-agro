@@ -9,6 +9,12 @@ const UserSchema = new mongoose.Schema(
     role:      { type: String, enum: ['operator', 'supervisor'], default: 'operator' },
     isActive:  { type: Boolean, default: true },
     lastLogin: { type: Date },
+
+    // Sessions/JWTs issued before this timestamp are rejected by
+    // protectUser/protectAdminOrUser — mirrors Admin.passwordChangedAt
+    // (models/Admin.js). Optional/unset for every existing document; a
+    // missing value simply means "never invalidated by a password change".
+    passwordChangedAt: { type: Date },
   },
   { timestamps: true }
 );

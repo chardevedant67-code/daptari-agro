@@ -26,4 +26,12 @@ const SeedPacketSchema = new mongoose.Schema({
   sessionId:    { type: mongoose.Schema.Types.ObjectId, ref: 'WeightSession', default: null },
 }, { timestamps: true });
 
+// Supports: SeedBatch.aggregate's $group/$lookup on batchId (batchRoutes.js
+// filled-count + inventory queries), and the direct SeedPacket.find({batchId})
+// calls in batchRoutes.js (qr-list, batch detail) and sessionRoutes.js
+// (GET /api/sessions?batchId= resolution) — five real query/aggregation
+// sites, none previously covered by any index (uniqueId's unique index is
+// unrelated to this field).
+SeedPacketSchema.index({ batchId: 1 });
+
 module.exports = mongoose.model('SeedPacket', SeedPacketSchema);

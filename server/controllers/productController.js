@@ -2,6 +2,7 @@ const path = require('path');
 const Product = require('../models/Product');
 const generateQR = require('../utils/generateQR');
 const { streamQrFile } = require('../utils/qrStorage');
+const { sendServerError } = require('../utils/errorResponse');
 
 // Matches the new GridFS-backed qrCodeUrl format (/api/qr/<fileId>). Older
 // products predate GridFS and still carry a /uploads/qr/... filesystem path
@@ -31,7 +32,7 @@ const createProduct = async (req, res) => {
       product,
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'productController');
   }
 };
 
@@ -66,7 +67,7 @@ const getProducts = async (req, res) => {
       products,
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'productController');
   }
 };
 
@@ -77,7 +78,7 @@ const getProduct = async (req, res) => {
     if (!product) return res.status(404).json({ success: false, message: 'Product not found' });
     res.json({ success: true, product });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'productController');
   }
 };
 
@@ -103,7 +104,7 @@ const downloadQR = async (req, res) => {
     const filePath = path.join(__dirname, '..', product.qrCodeUrl);
     res.download(filePath, `QR-${product.productId}.png`);
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'productController');
   }
 };
 
@@ -123,7 +124,7 @@ const updateProduct = async (req, res) => {
 
     res.json({ success: true, message: 'Product updated', product });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'productController');
   }
 };
 
@@ -134,7 +135,7 @@ const deleteProduct = async (req, res) => {
     if (!product) return res.status(404).json({ success: false, message: 'Product not found' });
     res.json({ success: true, message: 'Product deleted' });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'productController');
   }
 };
 

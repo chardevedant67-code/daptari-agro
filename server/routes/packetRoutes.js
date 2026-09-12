@@ -2,6 +2,7 @@ const express = require('express');
 const router  = express.Router();
 const SeedPacket = require('../models/SeedPacket');
 const { protectUser } = require('../middleware/userAuthMiddleware');
+const { sendServerError } = require('../utils/errorResponse');
 
 // GET /api/packets — saved measurements (filled packets), most recent first.
 // Used by the Android History screen. Reads real SeedPacket documents only.
@@ -15,7 +16,7 @@ router.get('/', protectUser, async (req, res) => {
 
     res.json({ success: true, packets });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'packetRoutes');
   }
 });
 
@@ -29,7 +30,7 @@ router.get('/:uniqueId', protectUser, async (req, res) => {
 
     res.json({ success: true, packet });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'packetRoutes');
   }
 });
 

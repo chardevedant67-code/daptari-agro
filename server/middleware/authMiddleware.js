@@ -65,6 +65,9 @@ const protectAdminOrUser = async (req, res, next) => {
       if (!user || !user.isActive) {
         return res.status(401).json({ success: false, message: 'Account not found or inactive' });
       }
+      if (user.passwordChangedAt && decoded.iat * 1000 < user.passwordChangedAt.getTime()) {
+        return res.status(401).json({ success: false, message: 'Session expired — please log in again' });
+      }
       req.user = user;
       return next();
     }

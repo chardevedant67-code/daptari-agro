@@ -1,6 +1,7 @@
 const User          = require('../models/User');
 const WeightSession = require('../models/WeightSession');
 const SeedPacket    = require('../models/SeedPacket');
+const { sendServerError } = require('../utils/errorResponse');
 
 // The User model's own roles (mobile/field accounts) — never Admin's roles
 // (admin/superadmin). Admin-account management stays under /api/admin/*.
@@ -25,7 +26,7 @@ const listUsers = async (req, res) => {
     const users = await User.find().select('-password').sort({ createdAt: -1 });
     res.json({ success: true, count: users.length, users: users.map(publicUser) });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'userAdminController');
   }
 };
 
@@ -61,7 +62,7 @@ const createUser = async (req, res) => {
     if (err.code === 11000) {
       return res.status(409).json({ success: false, message: 'Email already registered' });
     }
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'userAdminController');
   }
 };
 
@@ -96,7 +97,7 @@ const updateUser = async (req, res) => {
     if (err.code === 11000) {
       return res.status(409).json({ success: false, message: 'Email already registered' });
     }
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'userAdminController');
   }
 };
 
@@ -127,7 +128,7 @@ const deleteUser = async (req, res) => {
 
     res.json({ success: true, message: 'Operator deleted' });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'userAdminController');
   }
 };
 
@@ -149,11 +150,15 @@ const setUserPassword = async (req, res) => {
     }
 
     user.password = password;
+    // Invalidates every JWT issued before this instant — see
+    // middleware/userAuthMiddleware.js and authMiddleware.js's
+    // protectAdminOrUser (User branch).
+    user.passwordChangedAt = new Date();
     await user.save();
 
     res.json({ success: true, message: 'Password updated' });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    sendServerError(res, err, 'userAdminController');
   }
 };
 

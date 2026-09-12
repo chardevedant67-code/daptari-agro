@@ -44,4 +44,13 @@ WeightSessionSchema.index(
   { unique: true, partialFilterExpression: { status: 'active', packetUniqueId: { $type: 'string' } } }
 );
 
+// Supports GET /api/sessions (sessionRoutes.js) — the Admin Reports/Records/
+// History query pattern: optionally filter by `status`, always sorted
+// newest-first ({createdAt:-1, _id:-1}). Covers both the paginated normal
+// path and the unbounded export=csv path (no skip/limit ceiling there),
+// which is the more exposed one as history grows. The partial unique index
+// above only covers {packetUniqueId, status:'active'} lookups and does not
+// serve this status+createdAt access pattern.
+WeightSessionSchema.index({ status: 1, createdAt: -1 });
+
 module.exports = mongoose.model('WeightSession', WeightSessionSchema);
