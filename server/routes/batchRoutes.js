@@ -1,13 +1,10 @@
 const express  = require('express');
-const path     = require('path');
-const fs       = require('fs');
 const router   = express.Router();
 const QRCode   = require('qrcode');
 const SeedBatch  = require('../models/SeedBatch');
 const SeedPacket = require('../models/SeedPacket');
 const { protect } = require('../middleware/authMiddleware');
-
-const QR_DIR = path.join(__dirname, '..', 'uploads', 'qr');
+const { uploadQrPng, deleteQrFile } = require('../utils/qrStorage');
 
 // Public base URL that gets encoded into every packet's QR code (the
 // /scan/:uniqueId destination a phone opens on scan) — NOT the qrCodeUrl
@@ -69,10 +66,6 @@ router.post('/', protect, async (req, res) => {
     const SC = seedCode.toUpperCase().replace(/[^A-Z0-9]/g, '');
     const BC = batchCode.toUpperCase().replace(/[^A-Z0-9]/g, '');
 
-    // Batch QR folder
-    const batchFolder = path.join(QR_DIR, `${SC}${BC}`);
-    if (!fs.existsSync(batchFolder)) fs.mkdirSync(batchFolder, { recursive: true });
-
     const batch = await SeedBatch.create({
       batchName: batchName || `${seedType} ${batchNumber}`,
       seedType, seedCategory: seedCategory || '', seedCode: SC, batchNumber, batchCode: BC,
@@ -81,26 +74,41 @@ router.post('/', protect, async (req, res) => {
       warehouse: warehouse || '', rack: rack || '', shelf: shelf || '',
     });
 
-    // Generate all QR PNGs in parallel (much faster than sequential)
+    // Generate all QR PNGs in parallel (much faster than sequential), each
+    // uploaded straight to the 'qr' GridFS bucket as an in-memory Buffer —
+    // no filesystem write, so nothing is lost on Render's ephemeral disk.
     const packetDefs = Array.from({ length: total }, (_, i) => {
       const serial   = String(i + 1).padStart(3, '0');
       const uniqueId = `PRD-${SC}${BC}-${serial}`;
       const fileName = `${uniqueId}.png`;
-      const filePath = path.join(batchFolder, fileName);
-      return { uniqueId, fileName, filePath };
+      return { uniqueId, fileName };
     });
 
-    await Promise.all(packetDefs.map(({ uniqueId, filePath }) =>
-      QRCode.toFile(filePath, `${baseUrl}/scan/${uniqueId}`, {  // URL so phone opens a page on scan
-        type: 'png', width: 400, margin: 2,
-        color: { dark: '#1a227f', light: '#ffffff' },
-      })
-    ));
+    const uploadedFileIds = [];
+    try {
+      await Promise.all(packetDefs.map(async (def) => {
+        const buffer = await QRCode.toBuffer(`${baseUrl}/scan/${def.uniqueId}`, {  // URL so phone opens a page on scan
+          type: 'png', width: 400, margin: 2,
+          color: { dark: '#1a227f', light: '#ffffff' },
+        });
+        def.fileId = await uploadQrPng(buffer, def.fileName, {
+          uniqueId: def.uniqueId,
+          batchId:  String(batch._id),
+        });
+        uploadedFileIds.push(def.fileId);
+      }));
+    } catch (err) {
+      // A sibling upload failed mid-batch — clean up whatever already
+      // succeeded so it doesn't become an orphan GridFS file, then fail the
+      // whole request clearly (no SeedPacket documents are created below).
+      await Promise.all(uploadedFileIds.map(id => deleteQrFile(id)));
+      throw err;
+    }
 
-    const packets = packetDefs.map(({ uniqueId, fileName }) => ({
+    const packets = packetDefs.map(({ uniqueId, fileId }) => ({
       uniqueId,
       batchId:   batch._id,
-      qrCodeUrl: `/uploads/qr/${SC}${BC}/${fileName}`,
+      qrCodeUrl: `/api/qr/${fileId}`,
       status:    'empty',
     }));
 

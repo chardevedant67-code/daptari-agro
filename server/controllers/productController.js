@@ -1,6 +1,12 @@
 const path = require('path');
 const Product = require('../models/Product');
 const generateQR = require('../utils/generateQR');
+const { streamQrFile } = require('../utils/qrStorage');
+
+// Matches the new GridFS-backed qrCodeUrl format (/api/qr/<fileId>). Older
+// products predate GridFS and still carry a /uploads/qr/... filesystem path
+// in this same field — those are left completely alone (see downloadQR).
+const GRIDFS_QR_URL_RE = /^\/api\/qr\/([a-f\d]{24})$/i;
 
 // POST /api/products  (multipart/form-data with optional image)
 const createProduct = async (req, res) => {
@@ -81,6 +87,19 @@ const downloadQR = async (req, res) => {
     const product = await Product.findById(req.params.id);
     if (!product) return res.status(404).json({ success: false, message: 'Product not found' });
 
+    const gridfsMatch = (product.qrCodeUrl || '').match(GRIDFS_QR_URL_RE);
+    if (gridfsMatch) {
+      const stream = await streamQrFile(gridfsMatch[1]);
+      if (!stream) return res.status(404).json({ success: false, message: 'QR not found' });
+      res.set('Content-Type', 'image/png');
+      res.set('Content-Disposition', `attachment; filename="QR-${product.productId}.png"`);
+      stream.on('error', () => {
+        if (!res.headersSent) res.status(404).json({ success: false, message: 'QR not found' });
+      });
+      return stream.pipe(res);
+    }
+
+    // Legacy pre-GridFS product: qrCodeUrl is still a filesystem path.
     const filePath = path.join(__dirname, '..', product.qrCodeUrl);
     res.download(filePath, `QR-${product.productId}.png`);
   } catch (err) {

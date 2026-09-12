@@ -1,6 +1,5 @@
 const QRCode = require('qrcode');
-const path = require('path');
-const fs = require('fs');
+const { uploadQrPng } = require('./qrStorage');
 
 const generateQR = async (product) => {
   const serverIP = process.env.SERVER_IP || 'localhost';
@@ -9,22 +8,18 @@ const generateQR = async (product) => {
   // URL that phone browser will open when scanned
   const qrData = `http://${serverIP}:${port}/p/${product.productId}`;
 
-  const uploadsDir = path.join(__dirname, '../uploads/qr');
-  if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-  }
-
   const fileName = `${product.productId.replace(/[^a-zA-Z0-9-_]/g, '_')}.png`;
-  const filePath = path.join(uploadsDir, fileName);
 
-  await QRCode.toFile(filePath, qrData, {
+  const buffer = await QRCode.toBuffer(qrData, {
     type: 'png',
     width: 400,
     margin: 2,
     color: { dark: '#1a227f', light: '#ffffff' },
   });
 
-  const qrCodeUrl = `/uploads/qr/${fileName}`;
+  const fileId = await uploadQrPng(buffer, fileName, { productId: product.productId });
+
+  const qrCodeUrl = `/api/qr/${fileId}`;
   return { qrCodeUrl, qrCodeData: qrData };
 };
 
