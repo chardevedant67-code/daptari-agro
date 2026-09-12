@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const WeightRecord = require('../models/WeightRecord');
 const { protect } = require('../middleware/authMiddleware');
+const { allowRoles } = require('../middleware/roleMiddleware');
 const { sendServerError } = require('../utils/errorResponse');
 
 router.use(protect);
@@ -39,8 +40,13 @@ router.get('/', async (req, res) => {
   }
 });
 
-// POST create record
-router.post('/', async (req, res) => {
+// POST create record. Mutating/privileged operation — matches the same
+// allowRoles('superadmin','admin') convention already used for the
+// equivalent create routes in productRoutes.js, machineRoutes.js, and
+// batchRoutes.js. Without this, any authenticated Admin — including the
+// lowest-privilege Admin role, 'operator' — could create arbitrary
+// WeightRecord documents with no role check at all.
+router.post('/', allowRoles('superadmin', 'admin'), async (req, res) => {
   try {
     const { productId, machineId, actualWeight, nominalWeight, notes } = req.body;
     const record = await WeightRecord.create({
@@ -60,8 +66,9 @@ router.post('/', async (req, res) => {
   }
 });
 
-// DELETE record
-router.delete('/:id', async (req, res) => {
+// DELETE record — destructive, restricted to superadmin only, matching
+// productRoutes.js/machineRoutes.js's delete convention.
+router.delete('/:id', allowRoles('superadmin'), async (req, res) => {
   try {
     await WeightRecord.findByIdAndDelete(req.params.id);
     res.json({ success: true, message: 'Record deleted' });
