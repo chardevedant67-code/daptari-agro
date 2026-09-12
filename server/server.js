@@ -4,6 +4,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
+const mongoose = require('mongoose');
 const connectDB = require('./config/db');
 const { requireEnv } = require('./utils/requireEnv');
 const app = express();
@@ -15,6 +16,10 @@ const app = express();
 // before connectDB() so a misconfigured deploy never even opens a DB
 // connection.
 requireEnv('JWT_SECRET');
+// Same reasoning as JWT_SECRET above — without this, mongoose.connect()
+// would still be attempted with `undefined`, surfacing as an opaque driver
+// parse error instead of a clear, immediate startup failure.
+requireEnv('MONGO_URI');
 
 // Render sits its own reverse proxy in front of this service — without this,
 // req.ip would resolve to that proxy's address for every request, making
@@ -32,7 +37,12 @@ app.use((req, res, next) => {
 });
 
 
-connectDB();
+// Captured (not fire-and-forget) so app.listen() below can wait for a
+// confirmed connection before accepting any HTTP traffic — previously the
+// server could start accepting requests before Mongo was actually
+// connected. connectDB() itself still process.exit(1)s on failure
+// (unchanged), so this promise only ever resolves on success.
+const dbReady = connectDB();
 
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
@@ -90,6 +100,21 @@ app.get('/api/health', (req, res) => {
   res.json({ success: true, status: 'ok', version: '1.0.0' });
 });
 
+// Separate, additive readiness probe — /api/health above is intentionally
+// left unchanged (liveness only: "the Node process is up") since existing
+// consumers depend on that exact contract. This one actually reflects
+// MongoDB connection state (1 = connected), for anything — e.g. Render's
+// healthCheckPath — that needs to know the backend can truly serve
+// DB-backed requests, not just that the process is running. Public,
+// unauthenticated, no internals exposed on either branch.
+app.get('/api/ready', (req, res) => {
+  const dbConnected = mongoose.connection.readyState === 1;
+  if (dbConnected) {
+    return res.json({ success: true, status: 'ready', db: 'connected' });
+  }
+  return res.status(503).json({ success: false, status: 'not_ready', db: 'disconnected' });
+});
+
 
 
 app.get('/', (req, res) => {
@@ -109,9 +134,65 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 5000;
-const HOST = '0.0.0.0'; 
-app.listen(PORT, HOST, () => {
-  console.log(` Server running on http://localhost:${PORT}`);
-  console.log(` Phone scan URL: http://${process.env.SERVER_IP || 'localhost'}:${PORT}/p/{productId}`);
+const HOST = '0.0.0.0';
 
+let httpServer;
+
+// Only start accepting HTTP traffic once MongoDB is actually connected —
+// see the `dbReady` comment above. connectDB() already process.exit(1)s on
+// its own failure, so nothing here needs a .catch(); this only ever runs
+// after a confirmed successful connection.
+dbReady.then(() => {
+  httpServer = app.listen(PORT, HOST, () => {
+    console.log(` Server running on http://localhost:${PORT}`);
+    console.log(` Phone scan URL: http://${process.env.SERVER_IP || 'localhost'}:${PORT}/p/{productId}`);
+  });
+});
+
+// Graceful shutdown for Render restarts/redeploys (SIGTERM) and local
+// Ctrl+C (SIGINT): stop accepting new connections, let in-flight requests
+// finish, close the MongoDB connection cleanly, then exit. A short forced-
+// exit timer guards against something hanging indefinitely.
+let shuttingDown = false;
+function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`${signal} received — shutting down gracefully...`);
+
+  const forceExitTimer = setTimeout(() => {
+    console.error('Graceful shutdown timed out — forcing exit.');
+    process.exit(1);
+  }, 10000);
+  forceExitTimer.unref();
+
+  const closeServer = httpServer
+    ? new Promise((resolve) => httpServer.close(resolve))
+    : Promise.resolve();
+
+  closeServer
+    .then(() => mongoose.connection.close())
+    .then(() => {
+      console.log('Shutdown complete.');
+      process.exit(0);
+    })
+    .catch((err) => {
+      console.error('Error during shutdown:', err.message);
+      process.exit(1);
+    });
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Never continue running in a corrupted/unknown state — log clearly (never
+// secrets, never req/res bodies, just the error itself) and exit so Render
+// restarts the process fresh. This matches Node's own safe default for
+// both cases; the explicit handlers just give a clearer, grep-able log
+// line before that exit instead of relying on Node's raw default output.
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] Unhandled Rejection:', reason);
+  process.exit(1);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught Exception:', err);
+  process.exit(1);
 });

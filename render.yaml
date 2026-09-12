@@ -5,6 +5,7 @@ services:
     rootDir: server
     buildCommand: npm install
     startCommand: npm start
+    healthCheckPath: /api/ready
     envVars:
       - key: NODE_ENV
         value: production
