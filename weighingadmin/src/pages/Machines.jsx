@@ -52,9 +52,14 @@ export default function Machines() {
     } finally { setSaving(false); }
   };
 
-  const handleDelete = async (id) => {
-    try { await api.delete(`/machines/${id}`); fetchMachines(); } catch (_) {}
+  // Confirmation gate before the existing delete call (E.6) — Cancel makes
+  // no API call at all; only Confirm proceeds to the same delete + refresh
+  // that already existed.
+  const handleDelete = async (machine) => {
     setAnchor(null);
+    if (!machine) return;
+    if (!window.confirm(`Delete machine "${machine.name}" (${machine.machineId})? This cannot be undone.`)) return;
+    try { await api.delete(`/machines/${machine._id}`); fetchMachines(); } catch (_) {}
   };
 
   const counts = {
@@ -133,7 +138,7 @@ export default function Machines() {
 
       <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)}>
         <MenuItem onClick={() => { setDetailOpen(true); setAnchor(null); }}>View Details</MenuItem>
-        <MenuItem onClick={() => handleDelete(selected?._id)} sx={{ color: '#dc2626' }}>Remove</MenuItem>
+        <MenuItem onClick={() => handleDelete(selected)} sx={{ color: '#dc2626' }}>Remove</MenuItem>
       </Menu>
 
       {/* Detail Dialog */}

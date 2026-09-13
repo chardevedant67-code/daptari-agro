@@ -67,14 +67,20 @@ export default function Operators() {
   // A 409 here means this operator has historical weighing records — the
   // backend refuses the delete and asks for deactivation instead, so that
   // response must reach the admin rather than fail silently.
-  const handleDelete = async (id) => {
+  //
+  // Confirmation gate before the existing delete call (E.6) — Cancel makes
+  // no API call at all; only Confirm proceeds to the same delete + refresh
+  // (or 409 error surfacing) that already existed.
+  const handleDelete = async (op) => {
+    setAnchor(null);
+    if (!op) return;
+    if (!window.confirm(`Delete operator "${op.name}" (${op.email})? This cannot be undone.`)) return;
     try {
-      await userAdminAPI.delete(id);
+      await userAdminAPI.delete(op._id);
       fetchOperators();
     } catch (err) {
       setActionMsg(err.response?.data?.message || 'Failed to delete operator');
     }
-    setAnchor(null);
   };
 
   const handleToggle = async (op) => {
@@ -180,7 +186,7 @@ export default function Operators() {
         <MenuItem onClick={() => handleToggle(selected)}>
           {selected?.isActive ? 'Deactivate' : 'Activate'}
         </MenuItem>
-        <MenuItem onClick={() => handleDelete(selected?._id)} sx={{ color: '#dc2626' }}>Delete</MenuItem>
+        <MenuItem onClick={() => handleDelete(selected)} sx={{ color: '#dc2626' }}>Delete</MenuItem>
       </Menu>
 
       {/* Set Password Dialog — superadmin-mediated recovery for a locked-out operator */}
