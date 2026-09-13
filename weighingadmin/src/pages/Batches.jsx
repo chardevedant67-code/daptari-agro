@@ -436,7 +436,7 @@ export default function Batches() {
                       ['Shelf', detailBatch.shelf || '—'],
                       ['Created', detailBatch.createdAt ? new Date(detailBatch.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'],
                     ].map(([label, value]) => (
-                      <Grid item xs={6} sm={4} md={2.4} key={label}>
+                      <Grid size={{ xs: 6, sm: 4, md: 2.4 }} key={label}>
                         <Box sx={{ background: '#f8fafc', borderRadius: 2, p: 1.2, textAlign: 'center', border: '1px solid #f1f5f9' }}>
                           <Typography sx={{ fontSize: 14, fontWeight: 800, color: '#0f172a' }}>{value}</Typography>
                           <Typography sx={{ fontSize: 9, color: '#64748b', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{label}</Typography>

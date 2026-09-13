@@ -127,17 +127,17 @@ export default function NewBatchDialog({ open, onClose, onCreated }) {
         </Box>
 
         <Grid container spacing={2}>
-          <Grid item xs={8}>
+          <Grid size={{ xs: 8 }}>
             <TextField fullWidth label="Seed Name" name="seedType" value={form.seedType}
               onChange={handleChange} size="small" placeholder="e.g. Soybean" />
           </Grid>
-          <Grid item xs={4}>
+          <Grid size={{ xs: 4 }}>
             <TextField fullWidth label="Seed Code" name="seedCode" value={form.seedCode}
               onChange={handleChange} size="small"
               inputProps={{ maxLength: 4, style: { textTransform: 'uppercase', fontFamily: 'monospace', fontWeight: 700 } }}
               helperText="Auto-derived" />
           </Grid>
-          <Grid item xs={12}>
+          <Grid size={{ xs: 12 }}>
             <TextField select fullWidth name="seedCategory" value={form.seedCategory}
               onChange={handleChange} size="small"
               SelectProps={{
@@ -157,33 +157,33 @@ export default function NewBatchDialog({ open, onClose, onCreated }) {
               {SEED_CATEGORY_OPTIONS.map(o => <MenuItem key={o} value={o}>{o}</MenuItem>)}
             </TextField>
           </Grid>
-          <Grid item xs={6}>
+          <Grid size={{ xs: 6 }}>
             <TextField fullWidth label="Batch Number" name="batchNumber" value={form.batchNumber}
               onChange={handleChange} size="small" placeholder="e.g. BA-09" />
           </Grid>
-          <Grid item xs={6}>
+          <Grid size={{ xs: 6 }}>
             <TextField fullWidth label="Batch Code" name="batchCode" value={form.batchCode}
               onChange={handleChange} size="small"
               inputProps={{ style: { textTransform: 'uppercase', fontFamily: 'monospace', fontWeight: 700 } }}
               helperText="Auto-derived" />
           </Grid>
-          <Grid item xs={12}>
+          <Grid size={{ xs: 12 }}>
             <TextField fullWidth label="Number of QR Codes" name="count" value={form.count}
               onChange={handleChange} size="small" type="number"
               placeholder="e.g. 500"
               inputProps={{ min: 1, max: 5000 }} />
           </Grid>
-          <Grid item xs={6}>
+          <Grid size={{ xs: 6 }}>
             <TextField fullWidth label="Month" name="month" value={form.month}
               onChange={handleChange} size="small" type="number"
               placeholder="e.g. 6" inputProps={{ min: 1, max: 12 }} />
           </Grid>
-          <Grid item xs={6}>
+          <Grid size={{ xs: 6 }}>
             <TextField fullWidth label="Year" name="year" value={form.year}
               onChange={handleChange} size="small" type="number"
               placeholder="e.g. 2026" />
           </Grid>
-          <Grid item xs={4}>
+          <Grid size={{ xs: 4 }}>
             <TextField select fullWidth name="warehouse" value={form.warehouse}
               onChange={handleChange} size="small"
               SelectProps={{ displayEmpty: true }}>
@@ -191,7 +191,7 @@ export default function NewBatchDialog({ open, onClose, onCreated }) {
               {WAREHOUSE_OPTIONS.map(o => <MenuItem key={o} value={o}>{o}</MenuItem>)}
             </TextField>
           </Grid>
-          <Grid item xs={4}>
+          <Grid size={{ xs: 4 }}>
             <TextField select fullWidth name="rack" value={form.rack}
               onChange={handleChange} size="small"
               SelectProps={{ displayEmpty: true }}>
@@ -199,7 +199,7 @@ export default function NewBatchDialog({ open, onClose, onCreated }) {
               {RACK_OPTIONS.map(o => <MenuItem key={o} value={o}>{o}</MenuItem>)}
             </TextField>
           </Grid>
-          <Grid item xs={4}>
+          <Grid size={{ xs: 4 }}>
             <TextField select fullWidth name="shelf" value={form.shelf}
               onChange={handleChange} size="small"
               SelectProps={{ displayEmpty: true }}>
