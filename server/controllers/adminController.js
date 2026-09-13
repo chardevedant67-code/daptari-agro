@@ -95,4 +95,58 @@ const changePassword = async (req, res) => {
   }
 };
 
-module.exports = { getAllAdmins, createAdmin, updateAdmin, deleteAdmin, changePassword };
+// PUT /api/admin/deactivate-self — any authenticated Admin, own account only
+// (E.1). The target is always req.admin._id (set by `protect` from the
+// verified JWT) — never req.params or req.body — so this can never touch
+// another admin's account regardless of what a caller sends. Requires
+// currentPassword re-confirmation, same as changePassword: unlike that
+// route, this one needs no other secret to succeed, so without this check a
+// stolen/leaked JWT alone would be enough to deactivate the real owner's
+// account as pure sabotage (same threat model B-12 already addressed for
+// change-password).
+const deactivateSelf = async (req, res) => {
+  try {
+    const { currentPassword } = req.body;
+
+    if (typeof currentPassword !== 'string' || !currentPassword) {
+      return res.status(400).json({ success: false, message: 'Current password is required' });
+    }
+
+    const admin = await Admin.findById(req.admin._id).select('+password');
+    if (!(await admin.matchPassword(currentPassword))) {
+      return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+    }
+
+    // Sole-active-superadmin safeguard: prevents the last superadmin from
+    // locking the whole system out of every allowRoles('superadmin') route
+    // (create/list/delete other admins, etc.) with no way back in short of
+    // direct DB access. Only evaluated for superadmins — every other role
+    // deactivates freely.
+    if (admin.role === 'superadmin') {
+      const otherActiveSuperadmins = await Admin.countDocuments({
+        role: 'superadmin',
+        isActive: true,
+        _id: { $ne: admin._id },
+      });
+      if (otherActiveSuperadmins === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'You are the only active superadmin — promote another admin to superadmin before deactivating this account.',
+        });
+      }
+    }
+
+    // Only isActive changes — password/passwordChangedAt are untouched.
+    // `protect` already rejects every future request for this account
+    // (isActive is checked live against the DB on every request, not just
+    // at login), so no separate token-invalidation step is needed here.
+    admin.isActive = false;
+    await admin.save();
+
+    res.json({ success: true, message: 'Account deactivated' });
+  } catch (err) {
+    sendServerError(res, err, 'adminController');
+  }
+};
+
+module.exports = { getAllAdmins, createAdmin, updateAdmin, deleteAdmin, changePassword, deactivateSelf };

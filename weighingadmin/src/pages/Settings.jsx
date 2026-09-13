@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Box, Button, Card, Divider, Grid, Switch, TextField,
   Typography, Alert, Avatar, Snackbar, CircularProgress,
@@ -14,6 +15,7 @@ import PageHeader from '../components/PageHeader';
 
 export default function Settings() {
   const { admin, logout } = useAuth();
+  const navigate = useNavigate();
 
   // Profile
   const [name, setName]         = useState(admin?.name || '');
@@ -83,6 +85,48 @@ export default function Settings() {
   const handleSignOutAll = () => {
     if (window.confirm('Sign out of all devices? You will be redirected to login.')) {
       logout();
+    }
+  };
+
+  // Deactivate Account (E.1) — real, server-side self-deactivation.
+  // deactivateStep reveals a password-confirmation field in place of the
+  // button; the backend requires currentPassword (see adminController.js's
+  // deactivateSelf) so a stolen/leaked session alone can never deactivate
+  // the account.
+  const [deactivateStep, setDeactivateStep] = useState(false);
+  const [deactivatePassword, setDeactivatePassword] = useState('');
+  const [deactivating, setDeactivating] = useState(false);
+  const [deactivateError, setDeactivateError] = useState('');
+
+  const startDeactivate = () => {
+    if (window.confirm('Deactivate your account? You will lose access immediately.')) {
+      setDeactivateError('');
+      setDeactivateStep(true);
+    }
+  };
+
+  const cancelDeactivate = () => {
+    setDeactivateStep(false);
+    setDeactivatePassword('');
+    setDeactivateError('');
+  };
+
+  const confirmDeactivate = async () => {
+    if (deactivating || !deactivatePassword) return;
+    setDeactivating(true);
+    setDeactivateError('');
+    try {
+      await adminAPI.deactivateSelf(deactivatePassword);
+      // Success: the account is deactivated server-side — every future
+      // request (including this session's own token, per authMiddleware's
+      // live isActive check) is rejected from here on. Clear local state
+      // the same way normal sign-out does and leave.
+      await logout();
+      navigate('/login');
+    } catch (err) {
+      // Failure: stay logged in, show exactly why, never pretend it worked.
+      setDeactivateError(err.response?.data?.message || 'Failed to deactivate account. Please try again.');
+      setDeactivating(false);
     }
   };
 
@@ -265,17 +309,43 @@ export default function Settings() {
                 sx={{ borderRadius: 2, justifyContent: 'flex-start' }}>
                 Sign Out of All Devices
               </Button>
-              <Button
-                variant="outlined"
-                color="error"
-                onClick={() => {
-                  if (window.confirm('Deactivate your account? You will lose access immediately.')) {
-                    logout();
-                  }
-                }}
-                sx={{ borderRadius: 2, justifyContent: 'flex-start' }}>
-                Deactivate Account
-              </Button>
+              {!deactivateStep ? (
+                <Button
+                  variant="outlined"
+                  color="error"
+                  onClick={startDeactivate}
+                  sx={{ borderRadius: 2, justifyContent: 'flex-start' }}>
+                  Deactivate Account
+                </Button>
+              ) : (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.2 }}>
+                  <TextField
+                    label="Confirm your current password"
+                    type="password"
+                    size="small"
+                    fullWidth
+                    autoFocus
+                    value={deactivatePassword}
+                    onChange={e => setDeactivatePassword(e.target.value)}
+                    disabled={deactivating}
+                    InputProps={{ sx: { borderRadius: 2 } }}
+                  />
+                  {deactivateError && <Alert severity="error" sx={{ borderRadius: 2 }}>{deactivateError}</Alert>}
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    <Button
+                      variant="contained"
+                      color="error"
+                      onClick={confirmDeactivate}
+                      disabled={deactivating || !deactivatePassword}
+                      sx={{ borderRadius: 2 }}>
+                      {deactivating ? 'Deactivating...' : 'Confirm Deactivation'}
+                    </Button>
+                    <Button variant="outlined" onClick={cancelDeactivate} disabled={deactivating} sx={{ borderRadius: 2 }}>
+                      Cancel
+                    </Button>
+                  </Box>
+                </Box>
+              )}
             </Box>
           </Card>
         </Grid>

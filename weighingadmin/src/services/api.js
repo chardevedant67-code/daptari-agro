@@ -101,6 +101,10 @@ export const adminAPI = {
   update:         (id, d)  => api.put(`/admin/${id}`, d),
   delete:         (id)     => api.delete(`/admin/${id}`),
   changePassword: (data)   => api.put('/admin/change-password', data),
+  // E.1 — self-deactivation. Targets the authenticated caller only (the
+  // backend never accepts an id for this) — requires currentPassword
+  // re-confirmation, same shape as changePassword.
+  deactivateSelf: (currentPassword) => api.put('/admin/deactivate-self', { currentPassword }),
 };
 
 // ── User / Operator management ───────────────────

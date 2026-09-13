@@ -9,6 +9,7 @@ const User = require('../models/User');
 const { protect, protectAdminOrUser } = require('../middleware/authMiddleware');
 const { protectUser } = require('../middleware/userAuthMiddleware');
 const { allowRoles } = require('../middleware/roleMiddleware');
+const { login } = require('../controllers/authController');
 
 describe('Authentication — Admin (protect)', () => {
   it('rejects a request with no Authorization header (401)', async () => {
@@ -172,5 +173,190 @@ describe('B-12 PUT /api/admin/change-password rate limiting (new finding)', () =
     await runStack(stack, 0, req, res);
     assert.equal(res.statusCode, 200);
     assert.ok(adminDoc.passwordChangedAt instanceof Date, 'B-2 passwordChangedAt behavior must still fire');
+  });
+});
+
+describe('E.1 PUT /api/admin/deactivate-self', () => {
+  it('an authenticated Admin can deactivate only their own account with the correct password', async () => {
+    const adminDoc = { _id: 'a1', role: 'admin', isActive: true, matchPassword: async () => true, save: async function () { this._saved = true; } };
+    adminDoc.select = async () => adminDoc;
+    let requestedId = null;
+    Admin.findById = (id) => { requestedId = id; return adminDoc; };
+    freshRequireCache('../routes/adminRoutes');
+    const router = require('../routes/adminRoutes');
+    const stack = fullStackFor(router, 'put', '/deactivate-self');
+    const req = { headers: authHeaderFor('a1'), body: { currentPassword: 'correct' } };
+    const res = mockRes();
+    await runStack(stack, 0, req, res);
+    assert.equal(res.statusCode, 200);
+    assert.equal(adminDoc.isActive, false);
+    assert.equal(requestedId, 'a1');
+  });
+
+  it('rejects an incorrect current password and leaves the account active', async () => {
+    const adminDoc = {
+      _id: 'a1', role: 'admin', isActive: true,
+      matchPassword: async () => false,
+      save: async () => { throw new Error('save must not be called on a wrong-password attempt'); },
+    };
+    adminDoc.select = async () => adminDoc;
+    Admin.findById = () => adminDoc;
+    freshRequireCache('../routes/adminRoutes');
+    const router = require('../routes/adminRoutes');
+    const stack = fullStackFor(router, 'put', '/deactivate-self');
+    const req = { headers: authHeaderFor('a1'), body: { currentPassword: 'wrong' } };
+    const res = mockRes();
+    await runStack(stack, 0, req, res);
+    assert.equal(res.statusCode, 401);
+    assert.equal(adminDoc.isActive, true);
+  });
+
+  it('rejects a missing currentPassword and leaves the account active', async () => {
+    const adminDoc = {
+      _id: 'a1', role: 'admin', isActive: true,
+      matchPassword: async () => true,
+      save: async () => { throw new Error('save must not be called with no currentPassword'); },
+    };
+    adminDoc.select = async () => adminDoc;
+    Admin.findById = () => adminDoc;
+    freshRequireCache('../routes/adminRoutes');
+    const router = require('../routes/adminRoutes');
+    const stack = fullStackFor(router, 'put', '/deactivate-self');
+    const req = { headers: authHeaderFor('a1'), body: {} };
+    const res = mockRes();
+    await runStack(stack, 0, req, res);
+    assert.equal(res.statusCode, 400);
+    assert.equal(adminDoc.isActive, true);
+  });
+
+  it('rejects a non-string currentPassword safely (no crash, no injection reaching matchPassword)', async () => {
+    const adminDoc = {
+      _id: 'a1', role: 'admin', isActive: true,
+      matchPassword: async () => true,
+      save: async () => { throw new Error('save must not be called with a non-string currentPassword'); },
+    };
+    adminDoc.select = async () => adminDoc;
+    Admin.findById = () => adminDoc;
+    freshRequireCache('../routes/adminRoutes');
+    const router = require('../routes/adminRoutes');
+    const stack = fullStackFor(router, 'put', '/deactivate-self');
+    const req = { headers: authHeaderFor('a1'), body: { currentPassword: { $ne: null } } };
+    const res = mockRes();
+    await runStack(stack, 0, req, res);
+    assert.equal(res.statusCode, 400);
+    assert.equal(adminDoc.isActive, true);
+  });
+
+  it('ignores any admin id supplied in the body — only the JWT-authenticated admin is ever affected', async () => {
+    const adminDoc = { _id: 'a1', role: 'admin', isActive: true, matchPassword: async () => true, save: async function () { this._saved = true; } };
+    adminDoc.select = async () => adminDoc;
+    let requestedId = null;
+    Admin.findById = (id) => { requestedId = id; return adminDoc; };
+    freshRequireCache('../routes/adminRoutes');
+    const router = require('../routes/adminRoutes');
+    const stack = fullStackFor(router, 'put', '/deactivate-self');
+    const req = { headers: authHeaderFor('a1'), body: { currentPassword: 'correct', id: 'someoneElse', adminId: 'x', _id: 'y' } };
+    const res = mockRes();
+    await runStack(stack, 0, req, res);
+    assert.equal(res.statusCode, 200);
+    assert.equal(requestedId, 'a1', 'must target only the JWT-authenticated admin id, never a body-supplied one');
+    assert.equal(adminDoc.isActive, false);
+  });
+
+  it('rejects an unauthenticated request (401)', async () => {
+    freshRequireCache('../routes/adminRoutes');
+    const router = require('../routes/adminRoutes');
+    const stack = fullStackFor(router, 'put', '/deactivate-self');
+    const req = { headers: {}, body: { currentPassword: 'x' } };
+    const res = mockRes();
+    await runStack(stack, 0, req, res);
+    assert.equal(res.statusCode, 401);
+  });
+
+  it('a deactivated Admin cannot log in again', async () => {
+    Admin.findOne = () => ({ select: async () => ({ _id: 'a1', isActive: false, matchPassword: async () => true, save: async () => {} }) });
+    const res = mockRes();
+    await login({ body: { email: 'a@x.com', password: 'whatever' } }, res);
+    assert.equal(res.statusCode, 403);
+    assert.equal(res.body.message, 'Account is deactivated');
+  });
+
+  it("a deactivated Admin's existing token is rejected on the very next protected request", async () => {
+    Admin.findById = async () => ({ _id: 'a1', isActive: false });
+    const res = mockRes();
+    let nextCalled = false;
+    await protect({ headers: authHeaderFor('a1') }, res, () => { nextCalled = true; });
+    assert.equal(nextCalled, false);
+    assert.equal(res.statusCode, 401);
+  });
+
+  it('another admin account remains completely unaffected', async () => {
+    const targetDoc  = { _id: 'a1', role: 'admin', isActive: true, matchPassword: async () => true, save: async function () { this._saved = true; } };
+    targetDoc.select = async () => targetDoc;
+    const otherDoc = { _id: 'a2', role: 'admin', isActive: true, name: 'Untouched' };
+    Admin.findById = (id) => (id === 'a1' ? targetDoc : otherDoc);
+    freshRequireCache('../routes/adminRoutes');
+    const router = require('../routes/adminRoutes');
+    const stack = fullStackFor(router, 'put', '/deactivate-self');
+    const req = { headers: authHeaderFor('a1'), body: { currentPassword: 'correct' } };
+    const res = mockRes();
+    await runStack(stack, 0, req, res);
+    assert.equal(res.statusCode, 200);
+    assert.equal(targetDoc.isActive, false);
+    assert.equal(otherDoc.isActive, true);
+    assert.equal(otherDoc.name, 'Untouched');
+  });
+
+  it('the sole active superadmin cannot deactivate themselves', async () => {
+    const adminDoc = {
+      _id: 's1', role: 'superadmin', isActive: true,
+      matchPassword: async () => true,
+      save: async () => { throw new Error('save must not be called — safeguard should reject before any write'); },
+    };
+    adminDoc.select = async () => adminDoc;
+    Admin.findById = () => adminDoc;
+    Admin.countDocuments = async () => 0; // no other active superadmin
+    freshRequireCache('../routes/adminRoutes');
+    const router = require('../routes/adminRoutes');
+    const stack = fullStackFor(router, 'put', '/deactivate-self');
+    const req = { headers: authHeaderFor('s1'), body: { currentPassword: 'correct' } };
+    const res = mockRes();
+    await runStack(stack, 0, req, res);
+    assert.equal(res.statusCode, 400);
+    assert.equal(adminDoc.isActive, true);
+  });
+
+  it('a superadmin can deactivate themselves when another active superadmin exists', async () => {
+    const adminDoc = { _id: 's1', role: 'superadmin', isActive: true, matchPassword: async () => true, save: async function () { this._saved = true; } };
+    adminDoc.select = async () => adminDoc;
+    Admin.findById = () => adminDoc;
+    Admin.countDocuments = async () => 1; // one other active superadmin exists
+    freshRequireCache('../routes/adminRoutes');
+    const router = require('../routes/adminRoutes');
+    const stack = fullStackFor(router, 'put', '/deactivate-self');
+    const req = { headers: authHeaderFor('s1'), body: { currentPassword: 'correct' } };
+    const res = mockRes();
+    await runStack(stack, 0, req, res);
+    assert.equal(res.statusCode, 200);
+    assert.equal(adminDoc.isActive, false);
+  });
+
+  it('leaves password and passwordChangedAt untouched by deactivation', async () => {
+    const adminDoc = {
+      _id: 'a1', role: 'admin', isActive: true, password: 'existingHash',
+      matchPassword: async () => true,
+      save: async function () { this._saved = true; },
+    };
+    adminDoc.select = async () => adminDoc;
+    Admin.findById = () => adminDoc;
+    freshRequireCache('../routes/adminRoutes');
+    const router = require('../routes/adminRoutes');
+    const stack = fullStackFor(router, 'put', '/deactivate-self');
+    const req = { headers: authHeaderFor('a1'), body: { currentPassword: 'correct' } };
+    const res = mockRes();
+    await runStack(stack, 0, req, res);
+    assert.equal(res.statusCode, 200);
+    assert.equal(adminDoc.password, 'existingHash');
+    assert.equal(adminDoc.passwordChangedAt, undefined);
   });
 });
