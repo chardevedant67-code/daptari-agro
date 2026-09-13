@@ -6,14 +6,36 @@ require('./setup');
 const jwt = require('jsonwebtoken');
 const { Readable } = require('stream');
 
+// A real (small) EventEmitter, not a plain object — express-rate-limit
+// (and other real middleware) listens for res.on('finish', ...) to
+// finalize its per-request accounting once the response completes. A
+// plain object with no working .on()/.emit() causes that middleware to
+// hang forever waiting for an event that can never fire.
+const { EventEmitter } = require('events');
+
 function mockRes() {
-  const res = {};
+  const res = new EventEmitter();
+  const headers = {};
   res.statusCode = null;
   res.body = null;
   res.sent = null;
+  res.headersSent = false;
   res.status = (c) => { res.statusCode = c; return res; };
-  res.json = (b) => { res.body = b; res.statusCode = res.statusCode || 200; return res; };
-  res.send = (s) => { res.sent = s; res.statusCode = res.statusCode || 200; return res; };
+  res.json = (b) => { res.body = b; res.statusCode = res.statusCode || 200; finish(); return res; };
+  res.send = (s) => { res.sent = s; res.statusCode = res.statusCode || 200; finish(); return res; };
+  // No-op header methods — real middleware (e.g. express-rate-limit, which
+  // sets RateLimit-* headers when standardHeaders:true) calls these; without
+  // them present the call throws and the middleware's own logic (including
+  // its request counter) never completes correctly.
+  res.setHeader = (name, value) => { headers[name] = value; return res; };
+  res.getHeader = (name) => headers[name];
+  res.removeHeader = (name) => { delete headers[name]; };
+  res.end = (body) => { if (body !== undefined) res.sent = body; finish(); return res; };
+  function finish() {
+    if (res.headersSent) return; // only ever emit 'finish' once per response
+    res.headersSent = true;
+    process.nextTick(() => res.emit('finish'));
+  }
   return res;
 }
 

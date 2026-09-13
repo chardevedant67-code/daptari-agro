@@ -117,6 +117,22 @@ const resetPasswordLimiter = rateLimit({
   keyGenerator: (req) => ipKeyGenerator(req.ip),
 });
 
+// H) PUT /api/admin/change-password — self-service password change (B-12).
+// Keyed by the authenticated Admin's own id, not IP/email: this route is
+// reachable only with an already-valid Admin JWT. Without this limiter, an
+// attacker holding a stolen/leaked token could use it as an unthrottled
+// oracle to brute-force the account's actual current password (the one
+// check gating the change), then set a new password themselves —
+// converting a temporary stolen token into permanent account takeover,
+// entirely bypassing adminLoginLimiter. A generous window/limit since this
+// is a rarely-used legitimate action, matching sessionMutationLimiter's style.
+const adminChangePasswordLimiter = rateLimit({
+  ...BASE,
+  windowMs: 60 * 60 * 1000,
+  limit: 10,
+  keyGenerator: (req) => String(req.admin._id),
+});
+
 module.exports = {
   adminLoginLimiter,
   userLoginLimiter,
@@ -126,4 +142,5 @@ module.exports = {
   forgotPasswordEmailLimiter,
   forgotPasswordIpLimiter,
   resetPasswordLimiter,
+  adminChangePasswordLimiter,
 };

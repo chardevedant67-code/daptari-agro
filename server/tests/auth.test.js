@@ -2,7 +2,7 @@ require('./setup');
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const jwt = require('jsonwebtoken');
-const { mockRes, authHeaderFor } = require('./helpers');
+const { mockRes, authHeaderFor, fullStackFor, runStack, freshRequireCache } = require('./helpers');
 
 const Admin = require('../models/Admin');
 const User = require('../models/User');
@@ -125,5 +125,52 @@ describe('Role authorization (allowRoles)', () => {
     let nextCalled = false;
     mw({ admin: { role: 'admin' } }, res, () => { nextCalled = true; });
     assert.equal(nextCalled, true);
+  });
+});
+
+describe('B-12 PUT /api/admin/change-password rate limiting (new finding)', () => {
+  it('the route stack includes a rate limiter ahead of the handler', () => {
+    freshRequireCache('../routes/adminRoutes');
+    const router = require('../routes/adminRoutes');
+    const stack = fullStackFor(router, 'put', '/change-password');
+    // [protect, adminChangePasswordLimiter, changePassword] = 3 layers.
+    // Previously this route was only [protect, changePassword] = 2.
+    assert.ok(stack.length >= 3, `expected >=3 layers (protect, limiter, handler), got ${stack.length}`);
+  });
+
+  it('an attacker with a valid token cannot use it as an unthrottled password-guessing oracle', async () => {
+    // Must double as what `protect` awaits directly (Admin.findById(id), no
+    // .select()) and what changePassword awaits via .select('+password') —
+    // same object either way, so isActive is visible to `protect` too.
+    const adminDoc = { _id: 'a1', isActive: true, matchPassword: async () => false, save: async () => {} };
+    adminDoc.select = async () => adminDoc;
+    Admin.findById = () => adminDoc;
+    freshRequireCache('../routes/adminRoutes');
+    const router = require('../routes/adminRoutes');
+    const stack = fullStackFor(router, 'put', '/change-password');
+    const header = authHeaderFor('a1');
+    let sawA429 = false;
+    for (let i = 0; i < 15; i++) {
+      const req = { headers: header, ip: '127.0.0.1', body: { currentPassword: `guess${i}`, newPassword: 'newpass123' } };
+      const res = mockRes();
+      await runStack(stack, 0, req, res);
+      if (res.statusCode === 429) { sawA429 = true; break; }
+      assert.equal(res.statusCode, 401, `attempt ${i}: wrong-password guesses should 401, not succeed`);
+    }
+    assert.ok(sawA429, 'expected the limiter to eventually return 429 across repeated guesses');
+  });
+
+  it('a legitimate single password change (correct currentPassword) still works', async () => {
+    const adminDoc = { _id: 'a2', isActive: true, matchPassword: async () => true, save: async function () { this._saved = true; } };
+    adminDoc.select = async () => adminDoc;
+    Admin.findById = () => adminDoc;
+    freshRequireCache('../routes/adminRoutes');
+    const router = require('../routes/adminRoutes');
+    const stack = fullStackFor(router, 'put', '/change-password');
+    const req = { headers: authHeaderFor('a2'), body: { currentPassword: 'correct', newPassword: 'newpass123' } };
+    const res = mockRes();
+    await runStack(stack, 0, req, res);
+    assert.equal(res.statusCode, 200);
+    assert.ok(adminDoc.passwordChangedAt instanceof Date, 'B-2 passwordChangedAt behavior must still fire');
   });
 });

@@ -36,6 +36,24 @@ router.get('/:uniqueId', async (req, res) => {
   }
 });
 
+// Escapes text before it is interpolated into HTML generated below (pageHTML/
+// page404) — every value here can originate from the database (admin-entered
+// batch/product fields) or directly from the URL (req.params.uniqueId), and
+// this route is public and unauthenticated, so nothing dynamic may reach the
+// response unescaped. `&` is replaced first so the entities added for the
+// other characters are never themselves re-escaped. null/undefined are
+// treated as empty string here — callers still supply their own '—' fallback
+// for "no data", which passes through unchanged (it has no special chars).
+function escapeHtml(value) {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function fmt(date) {
   if (!date) return '—';
   return new Date(date).toLocaleString('en-IN', {
@@ -53,7 +71,7 @@ function page404(id) {
   .s{font-size:13px;color:#64748b}.id{font-family:monospace;font-size:13px;background:#f8fafc;border-radius:8px;padding:8px 12px;margin-top:16px;color:#475569}</style>
   </head><body><div class="c"><div class="e">❓</div>
   <div class="t">QR Not Found</div><div class="s">This packet ID doesn't exist.</div>
-  <div class="id">${id}</div></div></body></html>`;
+  <div class="id">${escapeHtml(id)}</div></div></body></html>`;
 }
 
 function pageHTML(packet) {
@@ -70,7 +88,7 @@ function pageHTML(packet) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-  <title>${packet.uniqueId} — WeighingQR</title>
+  <title>${escapeHtml(packet.uniqueId)} — WeighingQR</title>
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f1f5f9;min-height:100vh;padding-bottom:40px}
@@ -118,17 +136,17 @@ function pageHTML(packet) {
 <body>
   <div class="hdr">
     <div class="brand">WEIGHINGQR · SEED TRACKING</div>
-    <div class="uid">${packet.uniqueId}</div>
+    <div class="uid">${escapeHtml(packet.uniqueId)}</div>
   </div>
 
   <div class="card">
     <span class="badge ${filled ? 'badge-filled' : 'badge-empty'}">${filled ? '✓ Filled &amp; Weighed' : '○ Not Yet Filled'}</span>
 
     <div class="sec">Batch Information</div>
-    <div class="row"><span class="lbl">Batch Name</span><span class="val">${batch?.batchName || '—'}</span></div>
-    <div class="row"><span class="lbl">Seed Type</span><span class="val">${batch?.seedType || '—'}</span></div>
-    <div class="row"><span class="lbl">Batch No.</span><span class="val mono">${batch?.batchNumber || '—'}</span></div>
-    <div class="row"><span class="lbl">Packet ID</span><span class="val mono">${packet.uniqueId}</span></div>
+    <div class="row"><span class="lbl">Batch Name</span><span class="val">${escapeHtml(batch?.batchName || '—')}</span></div>
+    <div class="row"><span class="lbl">Seed Type</span><span class="val">${escapeHtml(batch?.seedType || '—')}</span></div>
+    <div class="row"><span class="lbl">Batch No.</span><span class="val mono">${escapeHtml(batch?.batchNumber || '—')}</span></div>
+    <div class="row"><span class="lbl">Packet ID</span><span class="val mono">${escapeHtml(packet.uniqueId)}</span></div>
 
     <div class="divider"></div>
 
@@ -136,22 +154,22 @@ function pageHTML(packet) {
     <div class="sec">Weight Data</div>
     <div class="wgrid">
       <div class="wbox">
-        <div class="wval">${before ?? '—'}</div>
+        <div class="wval">${escapeHtml(before ?? '—')}</div>
         <div class="wunit">kg</div>
         <div class="wlbl">Before Fill</div>
       </div>
       <div class="wbox">
-        <div class="wval">${after ?? '—'}</div>
+        <div class="wval">${escapeHtml(after ?? '—')}</div>
         <div class="wunit">kg</div>
         <div class="wlbl">After Fill</div>
       </div>
     </div>
     ${loss !== null ? `
     <div class="loss" style="background:${parseFloat(loss)>0?'#fff7ed':'#f0fdf4'};border:1.5px solid ${parseFloat(loss)>0?'#fed7aa':'#bbf7d0'}">
-      <div class="loss-val" style="color:${parseFloat(loss)>0?'#c2410c':'#16a34a'}">${loss} kg</div>
+      <div class="loss-val" style="color:${parseFloat(loss)>0?'#c2410c':'#16a34a'}">${escapeHtml(loss)} kg</div>
       <div class="loss-lbl">Seed Weight (After − Before)</div>
     </div>` : ''}
-    <div class="row"><span class="lbl">Weighed At</span><span class="val">${fmt(packet.afterTime || packet.linkedAt)}</span></div>
+    <div class="row"><span class="lbl">Weighed At</span><span class="val">${escapeHtml(fmt(packet.afterTime || packet.linkedAt))}</span></div>
     ` : `
     <div class="empty-state">
       <div class="ic">⚖️</div>
