@@ -14,6 +14,7 @@ import Machines from './pages/Machines';
 import Operators from './pages/Operators';
 import Records from './pages/Records';
 import Reports from './pages/Reports';
+import Admins from './pages/Admins';
 
 function PrivateRoute({ children }) {
   const token = localStorage.getItem('token');
@@ -50,6 +51,14 @@ export default function App() {
             <Route path="/operators"    element={<PrivateRoute><Operators /></PrivateRoute>} />
             <Route path="/records"      element={<PrivateRoute><Records /></PrivateRoute>} />
             <Route path="/reports"      element={<PrivateRoute><Reports /></PrivateRoute>} />
+            {/* Same PrivateRoute as every other page here — just requires a
+                valid session, not a specific role. Admins.jsx itself already
+                degrades correctly for a non-superadmin (GET /api/admin/all
+                is superadmin-only server-side, so the page's own existing
+                error state handles that; see E.7-A/D). The Sidebar link to
+                this route is hidden for non-superadmins as a UX nicety on
+                top of that, not instead of it. */}
+            <Route path="/admins"       element={<PrivateRoute><Admins /></PrivateRoute>} />
             <Route path="/settings"     element={<PrivateRoute><Settings /></PrivateRoute>} />
 
             <Route path="*" element={<Navigate to="/login" replace />} />

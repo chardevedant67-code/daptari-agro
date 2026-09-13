@@ -14,6 +14,7 @@ import PrecisionManufacturingIcon from '@mui/icons-material/PrecisionManufacturi
 import PeopleIcon from '@mui/icons-material/People';
 import ScaleIcon from '@mui/icons-material/Scale';
 import AssessmentIcon from '@mui/icons-material/Assessment';
+import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 
 const DRAWER_WIDTH = 256;
 
@@ -40,12 +41,24 @@ const navGroups = [
       { label: 'Reports',   icon: <AssessmentIcon />,               path: '/reports' },
     ],
   },
+  // E.7-D — superadminOnly filtered out at render time below (see
+  // isSuperadmin) for every other role; the backend's own
+  // allowRoles('superadmin') on GET/POST/PUT/DELETE /api/admin/* remains
+  // the real enforcement, this is UX only.
+  {
+    label: 'ADMINISTRATION',
+    superadminOnly: true,
+    items: [
+      { label: 'Admins', icon: <AdminPanelSettingsIcon />, path: '/admins' },
+    ],
+  },
 ];
 
 export default function Sidebar() {
   const navigate = useNavigate();
   const location = useLocation();
   const { logout, admin } = useAuth();
+  const isSuperadmin = admin?.role === 'superadmin';
 
   return (
     <Drawer
@@ -80,7 +93,7 @@ export default function Sidebar() {
 
       {/* Nav */}
       <Box sx={{ px: 1.5, py: 1, flex: 1, overflowY: 'auto' }}>
-        {navGroups.map((group) => (
+        {navGroups.filter(group => !group.superadminOnly || isSuperadmin).map((group) => (
           <Box key={group.label} sx={{ mb: 1 }}>
             <Typography sx={{ px: 1.5, pt: 1.5, pb: 0.5, fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.1em' }}>
               {group.label}
