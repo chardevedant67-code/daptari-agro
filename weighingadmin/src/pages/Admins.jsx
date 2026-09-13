@@ -1,32 +1,48 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  Avatar, Box, Card, Chip, CircularProgress, Grid,
+  Avatar, Box, Button, Card, Chip, CircularProgress, Grid, IconButton,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
-  Typography, Alert,
+  Typography, Alert, Dialog, DialogTitle, DialogContent, DialogActions,
+  TextField, FormControl, InputLabel, Select, MenuItem, Snackbar,
 } from '@mui/material';
+import AddIcon from '@mui/icons-material/Add';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
+import Menu from '@mui/material/Menu';
 import Layout from '../components/Layout';
 import StatCard from '../components/StatCard';
 import PageHeader from '../components/PageHeader';
 import { adminAPI } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 
 // Admin model's own roles — separate from the User/operator model shown on
 // the Operators page (see that page's own comment on the same naming
-// overlap).
+// overlap). Matches server/models/Admin.js's schema enum exactly — never a
+// different list than what the backend actually accepts.
+const ADMIN_ROLES = ['superadmin', 'admin', 'operator'];
 const roleStyle = {
   superadmin: { bg: 'rgba(26,34,127,0.08)', color: '#1a227f' },
   admin:      { bg: '#f0fdf4', color: '#16a34a' },
   operator:   { bg: '#fef9c3', color: '#ca8a04' },
 };
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMPTY_CREATE_FORM = { name: '', email: '', password: '', role: 'admin' };
+
 const initials = (name) => name?.split(' ').map(n => n[0]).join('').toUpperCase() || '?';
 const avatarColor = (i) => ['#1a227f', '#6366f1', '#10b981', '#f59e0b', '#f43f5e'][i % 5];
 
-// E.7-A — read-only Admin list. Real data only, via the existing
-// GET /api/admin/all (superadmin-only, password already excluded by the
-// backend). No create/edit/delete/activate/password actions here — those
-// are later E.7 sub-steps, added only once this list view is validated.
+// E.7-A/B — Admin list (real data via GET /api/admin/all) plus Create and
+// Delete (E.7-B), both superadmin-only. Edit/Activate-Deactivate/password
+// reset are later E.7 sub-steps, not part of this one.
 export default function Admins() {
+  // The backend is the real authority on all of this (every mutation route
+  // below is already allowRoles('superadmin')-gated server-side) — this
+  // only decides whether to show controls the current user could never
+  // actually use, so they don't hit an avoidable 403.
+  const { admin: currentAdmin } = useAuth();
+  const isSuperadmin = currentAdmin?.role === 'superadmin';
+
   const [admins, setAdmins]   = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState('');
@@ -41,16 +57,85 @@ export default function Admins() {
 
   // Deferred via setTimeout(..., 0) rather than called directly in the
   // effect body — same technique Products.jsx's fetchInventory effect
-  // already uses in this project (there with a real 300ms debounce; here
-  // with 0, since there's no input to debounce and the fetch should still
-  // fire effectively immediately on mount). react-hooks/set-state-in-effect
-  // flags a function that sets state being invoked synchronously inside an
-  // effect; scheduling it instead avoids that without changing what
-  // fetchAdmins itself does.
+  // already uses in this project; avoids the react-hooks/set-state-in-effect
+  // lint rule without changing what fetchAdmins itself does or when it
+  // effectively runs (still immediately on mount).
   useEffect(() => {
     const t = setTimeout(fetchAdmins, 0);
     return () => clearTimeout(t);
   }, [fetchAdmins]);
+
+  // One shared snackbar for both success and error feedback (Create and
+  // Delete both use it) — same Snackbar+Alert building block already used
+  // elsewhere in this app (Products.jsx's create-success toast, Operators.jsx's
+  // delete-conflict toast), just consolidated instead of duplicated.
+  const [snack, setSnack] = useState({ open: false, message: '', severity: 'success' });
+  const showSnack = (message, severity = 'success') => setSnack({ open: true, message, severity });
+  const closeSnack = () => setSnack(s => ({ ...s, open: false }));
+
+  // ── Create Admin ──────────────────────────────────────────────
+  const [createOpen, setCreateOpen]   = useState(false);
+  const [createForm, setCreateForm]   = useState(EMPTY_CREATE_FORM);
+  const [creating, setCreating]       = useState(false);
+  const [createError, setCreateError] = useState('');
+
+  const closeCreate = () => {
+    if (creating) return; // don't let the dialog be dismissed mid-request
+    setCreateOpen(false);
+    setCreateForm(EMPTY_CREATE_FORM);
+    setCreateError('');
+  };
+
+  const handleCreate = async () => {
+    setCreateError('');
+    if (!createForm.name.trim()) { setCreateError('Name is required'); return; }
+    if (!createForm.email.trim() || !EMAIL_RE.test(createForm.email.trim())) { setCreateError('A valid email is required'); return; }
+    if (createForm.password.length < 6) { setCreateError('Password must be at least 6 characters'); return; }
+    if (!ADMIN_ROLES.includes(createForm.role)) { setCreateError('Select a valid role'); return; }
+
+    setCreating(true);
+    try {
+      await adminAPI.create({
+        name: createForm.name.trim(),
+        email: createForm.email.trim(),
+        password: createForm.password,
+        role: createForm.role,
+      });
+      setCreateOpen(false);
+      setCreateForm(EMPTY_CREATE_FORM);
+      showSnack('Admin created successfully');
+      fetchAdmins();
+    } catch (err) {
+      // Real API error only — dialog stays open, fields are left exactly as
+      // typed so the admin can fix and retry. Never claim success here.
+      setCreateError(err.response?.data?.message || 'Failed to create admin');
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  // ── Delete Admin ──────────────────────────────────────────────
+  const [anchor, setAnchor]     = useState(null);
+  const [selected, setSelected] = useState(null);
+
+  const openMenu = (e, a) => { setAnchor(e.currentTarget); setSelected(a); };
+  const closeMenu = () => setAnchor(null);
+
+  const handleDelete = async (target) => {
+    setAnchor(null);
+    if (!target) return;
+    if (!window.confirm(`Delete admin "${target.name}" (${target.email})? This cannot be undone.`)) return;
+    try {
+      await adminAPI.delete(target._id || target.id);
+      showSnack('Admin deleted successfully');
+      fetchAdmins();
+    } catch (err) {
+      // Covers the backend's own self-delete block and any other conflict,
+      // shown exactly as returned — the list is left exactly as it was,
+      // never assumed deleted.
+      showSnack(err.response?.data?.message || 'Failed to delete admin', 'error');
+    }
+  };
 
   const counts = {
     total:      admins.length,
@@ -58,11 +143,19 @@ export default function Admins() {
     superadmin: admins.filter(a => a.role === 'superadmin').length,
   };
 
+  const columns = isSuperadmin ? ['Admin', 'Email', 'Role', 'Status', ''] : ['Admin', 'Email', 'Role', 'Status'];
+
   return (
     <Layout>
       <PageHeader
         title="Admins"
         subtitle="View all administrator accounts"
+        actions={isSuperadmin ? (
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}
+            sx={{ background: 'linear-gradient(135deg,#1a227f,#3d47a3)' }}>
+            Create Admin
+          </Button>
+        ) : undefined}
       />
 
       {error && <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>{error}</Alert>}
@@ -83,12 +176,12 @@ export default function Admins() {
             <Table>
               <TableHead>
                 <TableRow>
-                  {['Admin', 'Email', 'Role', 'Status'].map(h => <TableCell key={h}>{h}</TableCell>)}
+                  {columns.map(h => <TableCell key={h}>{h}</TableCell>)}
                 </TableRow>
               </TableHead>
               <TableBody>
                 {admins.length === 0 ? (
-                  <TableRow><TableCell colSpan={4} align="center" sx={{ py: 4, color: '#94a3b8' }}>No admins found</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={columns.length} align="center" sx={{ py: 4, color: '#94a3b8' }}>No admins found</TableCell></TableRow>
                 ) : admins.map((a, i) => {
                   const rc = roleStyle[a.role] || roleStyle.admin;
                   return (
@@ -107,6 +200,11 @@ export default function Admins() {
                             background: a.isActive ? '#dcfce7' : '#f1f5f9',
                             color: a.isActive ? '#16a34a' : '#94a3b8' }} />
                       </TableCell>
+                      {isSuperadmin && (
+                        <TableCell>
+                          <IconButton size="small" onClick={(e) => openMenu(e, a)}><MoreVertIcon fontSize="small" /></IconButton>
+                        </TableCell>
+                      )}
                     </TableRow>
                   );
                 })}
@@ -115,6 +213,61 @@ export default function Admins() {
           </TableContainer>
         )}
       </Card>
+
+      {isSuperadmin && (
+        <>
+          <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={closeMenu}>
+            <MenuItem onClick={() => handleDelete(selected)} sx={{ color: '#dc2626' }}>Delete</MenuItem>
+          </Menu>
+
+          {/* Create Admin Dialog */}
+          <Dialog open={createOpen} onClose={closeCreate} maxWidth="sm" fullWidth>
+            <DialogTitle sx={{ fontWeight: 700 }}>Create Admin</DialogTitle>
+            <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
+              <TextField
+                label="Full Name" fullWidth
+                value={createForm.name}
+                onChange={e => setCreateForm(p => ({ ...p, name: e.target.value }))}
+                InputProps={{ sx: { borderRadius: 2 } }}
+              />
+              <TextField
+                label="Email Address" type="email" fullWidth
+                value={createForm.email}
+                onChange={e => setCreateForm(p => ({ ...p, email: e.target.value }))}
+                InputProps={{ sx: { borderRadius: 2 } }}
+              />
+              <TextField
+                label="Password" type="password" fullWidth
+                value={createForm.password}
+                onChange={e => setCreateForm(p => ({ ...p, password: e.target.value }))}
+                helperText="Minimum 6 characters"
+                InputProps={{ sx: { borderRadius: 2 } }}
+              />
+              <FormControl fullWidth>
+                <InputLabel>Role</InputLabel>
+                <Select
+                  value={createForm.role} label="Role"
+                  onChange={e => setCreateForm(p => ({ ...p, role: e.target.value }))}
+                  sx={{ borderRadius: 2 }}
+                >
+                  {ADMIN_ROLES.map(r => <MenuItem key={r} value={r} sx={{ textTransform: 'capitalize' }}>{r}</MenuItem>)}
+                </Select>
+              </FormControl>
+              {createError && <Alert severity="error" sx={{ borderRadius: 2 }}>{createError}</Alert>}
+            </DialogContent>
+            <DialogActions sx={{ px: 3, py: 2, gap: 1 }}>
+              <Button onClick={closeCreate} variant="outlined" disabled={creating}>Cancel</Button>
+              <Button onClick={handleCreate} variant="contained" disabled={creating}
+                sx={{ background: '#1a227f' }}>{creating ? 'Creating...' : 'Create Admin'}</Button>
+            </DialogActions>
+          </Dialog>
+        </>
+      )}
+
+      <Snackbar open={snack.open} autoHideDuration={4000} onClose={closeSnack}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
+        <Alert severity={snack.severity} onClose={closeSnack} sx={{ borderRadius: 2 }}>{snack.message}</Alert>
+      </Snackbar>
     </Layout>
   );
 }
