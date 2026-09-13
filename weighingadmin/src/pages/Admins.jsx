@@ -3,7 +3,7 @@ import {
   Avatar, Box, Button, Card, Chip, CircularProgress, Grid, IconButton,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   Typography, Alert, Dialog, DialogTitle, DialogContent, DialogActions,
-  TextField, FormControl, InputLabel, Select, MenuItem, Snackbar,
+  TextField, FormControl, InputLabel, Select, MenuItem, Snackbar, Switch,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
@@ -137,6 +137,70 @@ export default function Admins() {
     }
   };
 
+  // ── Edit Admin (E.7-C) — name, role, isActive only. Email is never part
+  // of editForm and is never sent — the backend's own PUT /api/admin/:id
+  // doesn't accept it either, so this isn't a restriction beyond what the
+  // API already enforces. ─────────────────────────────────────────
+  const [editOpen, setEditOpen]     = useState(false);
+  const [editTarget, setEditTarget] = useState(null);
+  const [editForm, setEditForm]     = useState({ name: '', role: 'admin', isActive: true });
+  const [editing, setEditing]       = useState(false);
+  const [editError, setEditError]   = useState('');
+
+  const openEdit = () => {
+    if (!selected) return;
+    setEditTarget(selected);
+    setEditForm({ name: selected.name || '', role: selected.role, isActive: selected.isActive });
+    setEditError('');
+    setEditOpen(true);
+    setAnchor(null);
+  };
+
+  const closeEdit = () => {
+    if (editing) return; // don't let the dialog be dismissed mid-request
+    setEditOpen(false);
+    setEditTarget(null);
+    setEditError('');
+  };
+
+  const handleEditSave = async () => {
+    setEditError('');
+    if (!editForm.name.trim()) { setEditError('Name is required'); return; }
+    if (!ADMIN_ROLES.includes(editForm.role)) { setEditError('Select a valid role'); return; }
+    if (typeof editForm.isActive !== 'boolean') { setEditError('Select a valid status'); return; }
+
+    // The backend has no special protection here — it already allows a
+    // superadmin to deactivate any admin (including the last active
+    // superadmin) or demote another superadmin, with no safeguard. Since the
+    // UI is the only place this gets surfaced, an extra confirmation is
+    // shown for exactly these two consequences before saving — this doesn't
+    // block or alter what the backend would otherwise allow, it only makes
+    // the destructive result explicit before it happens.
+    const isDeactivating = editTarget.isActive && !editForm.isActive;
+    const isSuperadminRoleChange = editTarget.role === 'superadmin' && editForm.role !== editTarget.role;
+    if (isDeactivating && !window.confirm(`Deactivate admin "${editTarget.name}" (${editTarget.email})? They will immediately lose access.`)) return;
+    if (isSuperadminRoleChange && !window.confirm(`Change "${editTarget.name}" (${editTarget.email}) from superadmin to ${editForm.role}? This removes their superadmin access.`)) return;
+
+    setEditing(true);
+    try {
+      await adminAPI.update(editTarget._id || editTarget.id, {
+        name: editForm.name.trim(),
+        role: editForm.role,
+        isActive: editForm.isActive,
+      });
+      setEditOpen(false);
+      setEditTarget(null);
+      showSnack('Admin updated successfully');
+      fetchAdmins();
+    } catch (err) {
+      // Real API error only — dialog stays open, the row is left exactly as
+      // it was until a real success response arrives.
+      setEditError(err.response?.data?.message || 'Failed to update admin');
+    } finally {
+      setEditing(false);
+    }
+  };
+
   const counts = {
     total:      admins.length,
     active:     admins.filter(a => a.isActive).length,
@@ -217,6 +281,7 @@ export default function Admins() {
       {isSuperadmin && (
         <>
           <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={closeMenu}>
+            <MenuItem onClick={openEdit}>Edit</MenuItem>
             <MenuItem onClick={() => handleDelete(selected)} sx={{ color: '#dc2626' }}>Delete</MenuItem>
           </Menu>
 
@@ -259,6 +324,54 @@ export default function Admins() {
               <Button onClick={closeCreate} variant="outlined" disabled={creating}>Cancel</Button>
               <Button onClick={handleCreate} variant="contained" disabled={creating}
                 sx={{ background: '#1a227f' }}>{creating ? 'Creating...' : 'Create Admin'}</Button>
+            </DialogActions>
+          </Dialog>
+
+          {/* Edit Admin Dialog (E.7-C) — name, role, status only */}
+          <Dialog open={editOpen} onClose={closeEdit} maxWidth="sm" fullWidth>
+            <DialogTitle sx={{ fontWeight: 700 }}>Edit Admin</DialogTitle>
+            <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
+              <TextField
+                label="Email" fullWidth disabled
+                value={editTarget?.email || ''}
+                helperText="Email cannot be changed"
+                InputProps={{ sx: { borderRadius: 2, color: '#94a3b8' } }}
+              />
+              <TextField
+                label="Full Name" fullWidth
+                value={editForm.name}
+                onChange={e => setEditForm(p => ({ ...p, name: e.target.value }))}
+                InputProps={{ sx: { borderRadius: 2 } }}
+              />
+              <FormControl fullWidth>
+                <InputLabel>Role</InputLabel>
+                <Select
+                  value={editForm.role} label="Role"
+                  onChange={e => setEditForm(p => ({ ...p, role: e.target.value }))}
+                  sx={{ borderRadius: 2 }}
+                >
+                  {ADMIN_ROLES.map(r => <MenuItem key={r} value={r} sx={{ textTransform: 'capitalize' }}>{r}</MenuItem>)}
+                </Select>
+              </FormControl>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 0.5 }}>
+                <Typography sx={{ fontSize: 13, fontWeight: 600 }}>
+                  Status: {editForm.isActive ? 'Active' : 'Inactive'}
+                </Typography>
+                <Switch
+                  checked={editForm.isActive}
+                  onChange={e => setEditForm(p => ({ ...p, isActive: e.target.checked }))}
+                  sx={{
+                    '& .MuiSwitch-switchBase.Mui-checked': { color: '#1a227f' },
+                    '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': { background: '#1a227f' },
+                  }}
+                />
+              </Box>
+              {editError && <Alert severity="error" sx={{ borderRadius: 2 }}>{editError}</Alert>}
+            </DialogContent>
+            <DialogActions sx={{ px: 3, py: 2, gap: 1 }}>
+              <Button onClick={closeEdit} variant="outlined" disabled={editing}>Cancel</Button>
+              <Button onClick={handleEditSave} variant="contained" disabled={editing}
+                sx={{ background: '#1a227f' }}>{editing ? 'Saving...' : 'Save Changes'}</Button>
             </DialogActions>
           </Dialog>
         </>
