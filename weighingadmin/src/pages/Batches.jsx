@@ -133,7 +133,7 @@ export default function Batches() {
       <PageHeader
         title="Seed Batches"
         subtitle="Generate and manage bulk QR codes for seed packets"
-        action={
+        actions={
           <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}
             sx={{ background: 'linear-gradient(135deg,#1a227f,#3d47a3)', borderRadius: 2, px: 2.5 }}>
             New Batch
