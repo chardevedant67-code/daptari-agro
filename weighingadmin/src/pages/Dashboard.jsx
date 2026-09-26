@@ -10,7 +10,6 @@ import TaskAltIcon from '@mui/icons-material/TaskAlt';
 import PendingActionsIcon from '@mui/icons-material/PendingActions';
 import ScaleIcon from '@mui/icons-material/Scale';
 import QrCodeIcon from '@mui/icons-material/QrCode';
-import AddIcon from '@mui/icons-material/Add';
 import Layout from '../components/Layout';
 import StatCard from '../components/StatCard';
 import PageHeader from '../components/PageHeader';
@@ -48,12 +47,6 @@ export default function Dashboard() {
       <PageHeader
         title="Dashboard"
         subtitle="Welcome back — here's what's happening today"
-        actions={
-          <Button variant="contained" startIcon={<AddIcon />} onClick={() => navigate('/batches')}
-            sx={{ background: 'linear-gradient(135deg,#1a227f,#3d47a3)' }}>
-            New Batch
-          </Button>
-        }
       />
 
       <Grid container spacing={2.5} sx={{ mb: 3 }}>

@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getAllAdmins, createAdmin, updateAdmin, deleteAdmin, changePassword, deactivateSelf } = require('../controllers/adminController');
+const { getAllAdmins, createAdmin, updateAdmin, deleteAdmin, changePassword, deactivateSelf, signOutAllDevices } = require('../controllers/adminController');
 const { protect } = require('../middleware/authMiddleware');
 const { allowRoles } = require('../middleware/roleMiddleware');
 const { adminChangePasswordLimiter } = require('../middleware/rateLimiter');
@@ -20,6 +20,10 @@ router.put('/change-password', adminChangePasswordLimiter, changePassword);
 // ownership is enforced entirely by targeting only req.admin._id inside
 // deactivateSelf, never a client-supplied id.
 router.put('/deactivate-self', deactivateSelf);
+// P3-1 — sign out all devices. Same reason as /deactivate-self for being
+// registered ahead of /:id, and the same no-allowRoles/self-only-via-
+// req.admin._id shape.
+router.put('/sign-out-all-devices', signOutAllDevices);
 router.put('/:id',             allowRoles('superadmin'), updateAdmin);
 router.delete('/:id',          allowRoles('superadmin'), deleteAdmin);
 

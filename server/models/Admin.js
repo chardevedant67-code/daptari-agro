@@ -22,6 +22,16 @@ const AdminSchema = new mongoose.Schema(
     // authMiddleware.js — this is what invalidates old tokens after a
     // password reset, since the JWT payload itself carries no version claim.
     passwordChangedAt:       { type: Date },
+
+    // P3-1 — independent "Sign Out All Devices" invalidation timestamp.
+    // Same check shape as passwordChangedAt (authMiddleware.js compares it
+    // against the JWT's iat), but deliberately a separate field: triggering
+    // a device-wide sign-out must never require an actual password change,
+    // and a password change already fully invalidates everything on its
+    // own — this field exists so that guarantee can be triggered on demand
+    // without touching the password itself. Optional/unset for every
+    // existing document.
+    sessionsInvalidatedAt:   { type: Date },
   },
   { timestamps: true }
 );

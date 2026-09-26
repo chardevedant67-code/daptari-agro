@@ -105,6 +105,9 @@ export const adminAPI = {
   // backend never accepts an id for this) — requires currentPassword
   // re-confirmation, same shape as changePassword.
   deactivateSelf: (currentPassword) => api.put('/admin/deactivate-self', { currentPassword }),
+  // P3-1 — sign out all devices. Same shape as deactivateSelf: targets the
+  // authenticated caller only, requires currentPassword re-confirmation.
+  signOutAllDevices: (currentPassword) => api.put('/admin/sign-out-all-devices', { currentPassword }),
 };
 
 // ── User / Operator management ───────────────────

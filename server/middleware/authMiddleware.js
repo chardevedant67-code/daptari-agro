@@ -28,6 +28,14 @@ const protect = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'Session expired — please log in again' });
     }
 
+    // P3-1 — independent "Sign Out All Devices" invalidation. Same shape as
+    // the passwordChangedAt check above, deliberately kept separate (see
+    // models/Admin.js) so it can fire without a password change ever
+    // happening. Never replaces or combines with the check above.
+    if (req.admin.sessionsInvalidatedAt && decoded.iat * 1000 < req.admin.sessionsInvalidatedAt.getTime()) {
+      return res.status(401).json({ success: false, message: 'Session expired — please log in again' });
+    }
+
     next();
   } catch (err) {
     return res.status(401).json({ success: false, message: 'Token invalid or expired' });
@@ -77,6 +85,12 @@ const protectAdminOrUser = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'Account not found or inactive' });
     }
     if (admin.passwordChangedAt && decoded.iat * 1000 < admin.passwordChangedAt.getTime()) {
+      return res.status(401).json({ success: false, message: 'Session expired — please log in again' });
+    }
+    // P3-1 — same independent check as protect() above, mirrored here since
+    // this branch duplicates protect()'s Admin authentication for shared
+    // Admin/User read routes (see this function's own comment).
+    if (admin.sessionsInvalidatedAt && decoded.iat * 1000 < admin.sessionsInvalidatedAt.getTime()) {
       return res.status(401).json({ success: false, message: 'Session expired — please log in again' });
     }
     req.admin = admin;

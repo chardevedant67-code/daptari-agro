@@ -82,9 +82,46 @@ export default function Settings() {
     setSnack('Notification preferences saved!');
   };
 
-  const handleSignOutAll = () => {
+  // Sign Out All Devices (P3-1) — real, server-side invalidation of every
+  // outstanding session for this account, including this one. Same
+  // step-reveal + password-confirmation pattern as Deactivate Account below
+  // (backend requires currentPassword — see adminController.js's
+  // signOutAllDevices — so a stolen/leaked session alone can never trigger
+  // this either).
+  const [signOutAllStep, setSignOutAllStep]         = useState(false);
+  const [signOutAllPassword, setSignOutAllPassword] = useState('');
+  const [signingOutAll, setSigningOutAll]           = useState(false);
+  const [signOutAllError, setSignOutAllError]       = useState('');
+
+  const startSignOutAll = () => {
     if (window.confirm('Sign out of all devices? You will be redirected to login.')) {
-      logout();
+      setSignOutAllError('');
+      setSignOutAllStep(true);
+    }
+  };
+
+  const cancelSignOutAll = () => {
+    setSignOutAllStep(false);
+    setSignOutAllPassword('');
+    setSignOutAllError('');
+  };
+
+  const confirmSignOutAll = async () => {
+    if (signingOutAll || !signOutAllPassword) return;
+    setSigningOutAll(true);
+    setSignOutAllError('');
+    try {
+      await adminAPI.signOutAllDevices(signOutAllPassword);
+      // Success: every session for this account — including this one — is
+      // now server-side invalid (authMiddleware's live sessionsInvalidatedAt
+      // check). Clear local state the same way normal sign-out does and leave.
+      await logout();
+      navigate('/login');
+    } catch (err) {
+      // Failure: stay logged in, localStorage untouched, show exactly why —
+      // never pretend it worked.
+      setSignOutAllError(err.response?.data?.message || 'Failed to sign out of all devices. Please try again.');
+      setSigningOutAll(false);
     }
   };
 
@@ -301,14 +338,44 @@ export default function Settings() {
             </Typography>
             <Divider sx={{ mb: 2.5 }} />
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-              <Button
-                variant="outlined"
-                color="error"
-                startIcon={<LogoutIcon />}
-                onClick={handleSignOutAll}
-                sx={{ borderRadius: 2, justifyContent: 'flex-start' }}>
-                Sign Out of All Devices
-              </Button>
+              {!signOutAllStep ? (
+                <Button
+                  variant="outlined"
+                  color="error"
+                  startIcon={<LogoutIcon />}
+                  onClick={startSignOutAll}
+                  sx={{ borderRadius: 2, justifyContent: 'flex-start' }}>
+                  Sign Out of All Devices
+                </Button>
+              ) : (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.2 }}>
+                  <TextField
+                    label="Confirm your current password"
+                    type="password"
+                    size="small"
+                    fullWidth
+                    autoFocus
+                    value={signOutAllPassword}
+                    onChange={e => setSignOutAllPassword(e.target.value)}
+                    disabled={signingOutAll}
+                    InputProps={{ sx: { borderRadius: 2 } }}
+                  />
+                  {signOutAllError && <Alert severity="error" sx={{ borderRadius: 2 }}>{signOutAllError}</Alert>}
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    <Button
+                      variant="contained"
+                      color="error"
+                      onClick={confirmSignOutAll}
+                      disabled={signingOutAll || !signOutAllPassword}
+                      sx={{ borderRadius: 2 }}>
+                      {signingOutAll ? 'Signing Out...' : 'Confirm Sign Out'}
+                    </Button>
+                    <Button variant="outlined" onClick={cancelSignOutAll} disabled={signingOutAll} sx={{ borderRadius: 2 }}>
+                      Cancel
+                    </Button>
+                  </Box>
+                </Box>
+              )}
               {!deactivateStep ? (
                 <Button
                   variant="outlined"

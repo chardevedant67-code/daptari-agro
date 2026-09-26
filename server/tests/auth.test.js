@@ -2,7 +2,7 @@ require('./setup');
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const jwt = require('jsonwebtoken');
-const { mockRes, authHeaderFor, fullStackFor, runStack, freshRequireCache } = require('./helpers');
+const { mockRes, authHeaderFor, fullStackFor, runStack, freshRequireCache, signToken } = require('./helpers');
 
 const Admin = require('../models/Admin');
 const User = require('../models/User');
@@ -358,5 +358,158 @@ describe('E.1 PUT /api/admin/deactivate-self', () => {
     assert.equal(res.statusCode, 200);
     assert.equal(adminDoc.password, 'existingHash');
     assert.equal(adminDoc.passwordChangedAt, undefined);
+  });
+});
+
+describe('P3-1 PUT /api/admin/sign-out-all-devices', () => {
+  it('an authenticated Admin can sign out all devices with the correct password; password/passwordChangedAt untouched', async () => {
+    const adminDoc = {
+      _id: 'a1', role: 'admin', isActive: true, password: 'existingHash',
+      matchPassword: async () => true,
+      save: async function () { this._saved = true; },
+    };
+    adminDoc.select = async () => adminDoc;
+    Admin.findById = () => adminDoc;
+    freshRequireCache('../routes/adminRoutes');
+    const router = require('../routes/adminRoutes');
+    const stack = fullStackFor(router, 'put', '/sign-out-all-devices');
+    const req = { headers: authHeaderFor('a1'), body: { currentPassword: 'correct' } };
+    const res = mockRes();
+    await runStack(stack, 0, req, res);
+    assert.equal(res.statusCode, 200);
+    assert.ok(adminDoc.sessionsInvalidatedAt instanceof Date);
+    assert.equal(adminDoc.password, 'existingHash');
+    assert.equal(adminDoc.passwordChangedAt, undefined);
+  });
+
+  it('a token issued BEFORE sessionsInvalidatedAt is rejected on the next protected request', async () => {
+    const invalidatedAt = new Date();
+    Admin.findById = async () => ({ _id: 'a1', isActive: true, sessionsInvalidatedAt: invalidatedAt });
+    const oldIat = Math.floor(invalidatedAt.getTime() / 1000) - 10; // issued 10s before invalidation
+    const token = signToken({ id: 'a1', iat: oldIat });
+    const res = mockRes();
+    let nextCalled = false;
+    await protect({ headers: { authorization: `Bearer ${token}` } }, res, () => { nextCalled = true; });
+    assert.equal(nextCalled, false);
+    assert.equal(res.statusCode, 401);
+  });
+
+  it('a token issued AFTER sessionsInvalidatedAt remains valid', async () => {
+    const invalidatedAt = new Date();
+    Admin.findById = async () => ({ _id: 'a1', isActive: true, sessionsInvalidatedAt: invalidatedAt });
+    const newIat = Math.floor(invalidatedAt.getTime() / 1000) + 10; // issued 10s after invalidation
+    const token = signToken({ id: 'a1', iat: newIat });
+    const res = mockRes();
+    let nextCalled = false;
+    await protect({ headers: { authorization: `Bearer ${token}` } }, res, () => { nextCalled = true; });
+    assert.equal(nextCalled, true);
+  });
+
+  it('rejects an incorrect current password and leaves sessionsInvalidatedAt unset', async () => {
+    const adminDoc = {
+      _id: 'a1', role: 'admin', isActive: true,
+      matchPassword: async () => false,
+      save: async () => { throw new Error('save must not be called on a wrong-password attempt'); },
+    };
+    adminDoc.select = async () => adminDoc;
+    Admin.findById = () => adminDoc;
+    freshRequireCache('../routes/adminRoutes');
+    const router = require('../routes/adminRoutes');
+    const stack = fullStackFor(router, 'put', '/sign-out-all-devices');
+    const req = { headers: authHeaderFor('a1'), body: { currentPassword: 'wrong' } };
+    const res = mockRes();
+    await runStack(stack, 0, req, res);
+    assert.equal(res.statusCode, 401);
+    assert.equal(adminDoc.sessionsInvalidatedAt, undefined);
+  });
+
+  it('rejects a missing currentPassword with no database mutation', async () => {
+    const adminDoc = {
+      _id: 'a1', role: 'admin', isActive: true,
+      matchPassword: async () => true,
+      save: async () => { throw new Error('save must not be called with no currentPassword'); },
+    };
+    adminDoc.select = async () => adminDoc;
+    Admin.findById = () => adminDoc;
+    freshRequireCache('../routes/adminRoutes');
+    const router = require('../routes/adminRoutes');
+    const stack = fullStackFor(router, 'put', '/sign-out-all-devices');
+    const req = { headers: authHeaderFor('a1'), body: {} };
+    const res = mockRes();
+    await runStack(stack, 0, req, res);
+    assert.equal(res.statusCode, 400);
+    assert.equal(adminDoc.sessionsInvalidatedAt, undefined);
+  });
+
+  it('rejects a non-string currentPassword safely with no database mutation', async () => {
+    const adminDoc = {
+      _id: 'a1', role: 'admin', isActive: true,
+      matchPassword: async () => true,
+      save: async () => { throw new Error('save must not be called with a non-string currentPassword'); },
+    };
+    adminDoc.select = async () => adminDoc;
+    Admin.findById = () => adminDoc;
+    freshRequireCache('../routes/adminRoutes');
+    const router = require('../routes/adminRoutes');
+    const stack = fullStackFor(router, 'put', '/sign-out-all-devices');
+    const req = { headers: authHeaderFor('a1'), body: { currentPassword: { $ne: null } } };
+    const res = mockRes();
+    await runStack(stack, 0, req, res);
+    assert.equal(res.statusCode, 400);
+    assert.equal(adminDoc.sessionsInvalidatedAt, undefined);
+  });
+
+  it('rejects an unauthenticated request (401)', async () => {
+    freshRequireCache('../routes/adminRoutes');
+    const router = require('../routes/adminRoutes');
+    const stack = fullStackFor(router, 'put', '/sign-out-all-devices');
+    const req = { headers: {}, body: { currentPassword: 'x' } };
+    const res = mockRes();
+    await runStack(stack, 0, req, res);
+    assert.equal(res.statusCode, 401);
+  });
+
+  it("signing out all devices for Admin A does not affect Admin B's document", async () => {
+    const targetDoc = { _id: 'a1', role: 'admin', isActive: true, matchPassword: async () => true, save: async function () { this._saved = true; } };
+    targetDoc.select = async () => targetDoc;
+    const otherDoc = { _id: 'a2', role: 'admin', isActive: true, name: 'Untouched' };
+    Admin.findById = (id) => (id === 'a1' ? targetDoc : otherDoc);
+    freshRequireCache('../routes/adminRoutes');
+    const router = require('../routes/adminRoutes');
+    const stack = fullStackFor(router, 'put', '/sign-out-all-devices');
+    const req = { headers: authHeaderFor('a1'), body: { currentPassword: 'correct' } };
+    const res = mockRes();
+    await runStack(stack, 0, req, res);
+    assert.equal(res.statusCode, 200);
+    assert.ok(targetDoc.sessionsInvalidatedAt instanceof Date);
+    assert.equal(otherDoc.sessionsInvalidatedAt, undefined);
+    assert.equal(otherDoc.name, 'Untouched');
+  });
+
+  // Proves the two invalidation checks in authMiddleware.js are genuinely
+  // independent — neither was replaced or merged with the other.
+  it('passwordChangedAt still invalidates independently, with no sessionsInvalidatedAt set at all', async () => {
+    const changedAt = new Date();
+    Admin.findById = async () => ({ _id: 'a1', isActive: true, passwordChangedAt: changedAt });
+    const oldIat = Math.floor(changedAt.getTime() / 1000) - 10;
+    const token = signToken({ id: 'a1', iat: oldIat });
+    const res = mockRes();
+    let nextCalled = false;
+    await protect({ headers: { authorization: `Bearer ${token}` } }, res, () => { nextCalled = true; });
+    assert.equal(nextCalled, false);
+    assert.equal(res.statusCode, 401);
+  });
+
+  it('sessionsInvalidatedAt rejects a token that already satisfies the unrelated, older passwordChangedAt check', async () => {
+    const changedAt = new Date(Date.now() - 60000); // long past — token issued well after this
+    const invalidatedAt = new Date();
+    Admin.findById = async () => ({ _id: 'a1', isActive: true, passwordChangedAt: changedAt, sessionsInvalidatedAt: invalidatedAt });
+    const oldIat = Math.floor(invalidatedAt.getTime() / 1000) - 10; // after passwordChangedAt, before sessionsInvalidatedAt
+    const token = signToken({ id: 'a1', iat: oldIat });
+    const res = mockRes();
+    let nextCalled = false;
+    await protect({ headers: { authorization: `Bearer ${token}` } }, res, () => { nextCalled = true; });
+    assert.equal(nextCalled, false);
+    assert.equal(res.statusCode, 401);
   });
 });

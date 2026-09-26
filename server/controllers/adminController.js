@@ -149,4 +149,38 @@ const deactivateSelf = async (req, res) => {
   }
 };
 
-module.exports = { getAllAdmins, createAdmin, updateAdmin, deleteAdmin, changePassword, deactivateSelf };
+// PUT /api/admin/sign-out-all-devices — any authenticated Admin, own account
+// only (P3-1). Same ownership/threat-model shape as deactivateSelf above:
+// target is always req.admin._id, never req.params/req.body, and
+// currentPassword re-confirmation is required since — unlike
+// passwordChangedAt's existing invalidation, which only ever fires as a
+// side effect of an actual password change — this route's entire purpose is
+// to flip an invalidation flag with no other secret involved, so without
+// this check a stolen/leaked JWT alone would be enough to trigger it.
+const signOutAllDevices = async (req, res) => {
+  try {
+    const { currentPassword } = req.body;
+
+    if (typeof currentPassword !== 'string' || !currentPassword) {
+      return res.status(400).json({ success: false, message: 'Current password is required' });
+    }
+
+    const admin = await Admin.findById(req.admin._id).select('+password');
+    if (!(await admin.matchPassword(currentPassword))) {
+      return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+    }
+
+    // Only sessionsInvalidatedAt changes — password/passwordChangedAt/
+    // isActive/role/name/email are all untouched. Deliberately independent
+    // of passwordChangedAt (see models/Admin.js) so this can be triggered
+    // without rotating the password.
+    admin.sessionsInvalidatedAt = new Date();
+    await admin.save();
+
+    res.json({ success: true, message: 'Signed out of all devices' });
+  } catch (err) {
+    sendServerError(res, err, 'adminController');
+  }
+};
+
+module.exports = { getAllAdmins, createAdmin, updateAdmin, deleteAdmin, changePassword, deactivateSelf, signOutAllDevices };
