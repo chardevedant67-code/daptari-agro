@@ -92,6 +92,7 @@ app.use('/api/batches',   require('./routes/batchRoutes'));
 app.use('/api/sessions',  require('./routes/sessionRoutes'));
 app.use('/api/packets',   require('./routes/packetRoutes'));
 app.use('/api/qr',        require('./routes/qrRoutes'));
+app.use('/api/desktop-records', require('./routes/desktopRecordRoutes'));
 app.use('/p',             require('./routes/scanRoutes'));
 app.use('/scan',          require('./routes/publicScanRoutes'));
 
