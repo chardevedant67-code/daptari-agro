@@ -37,12 +37,24 @@ const DATA_FIELDS = [
 
 const TEXT_MAX_LENGTH = 2000;
 
-// The only columns copied from an existing packet's batch when a record is
-// created by POST /api/desktop-records/import-packets. They are fixed for
-// packet-linked records (updates to them are ignored). Weight, Name Of
-// Variety and Varity_Code are deliberately NOT here — their mapping is
-// unconfirmed, so they are never pre-filled from packet/batch data.
+// Columns that stay tied to the packet's batch: copied when the packet's
+// record is created and fixed from then on (updates to them are ignored).
 const PACKET_DERIVED_FIELDS = ['crop', 'year', 'warehouse', 'rackShelf'];
+
+// Columns pre-filled, once, from the seed-management details saved with the
+// packet's batch on the Create New Batch form — same field name and type on
+// both sides. Unlike the columns above they stay editable by a Superadmin
+// afterwards, and an edit is never overwritten (records are only ever
+// inserted from batch data, never updated from it). Only a value actually
+// entered on the form is copied: nothing is derived from the seed name,
+// seed code or batch name. Weight is deliberately NOT here — how it maps to
+// a packet's weighing data is unconfirmed, so it is never pre-filled.
+const BATCH_DETAIL_FIELDS = [
+  'previousYear', 'yearCode', 'previousYearCode', 'farmLocationCode',
+  'femaleCode', 'maleCode', 'sptScore', 'diseaseScore', 'yield1', 'yield2',
+  'total', 'varietyName', 'varietyCode', 'previousLocationCode',
+  'locationCode', 'gene', 'comments', 'finalReport',
+];
 
 const dataPaths = {};
 for (const { field, type } of DATA_FIELDS) {
@@ -88,6 +100,7 @@ const DesktopSeedRecord = mongoose.model('DesktopSeedRecord', DesktopSeedRecordS
 
 DesktopSeedRecord.DATA_FIELDS = DATA_FIELDS;
 DesktopSeedRecord.PACKET_DERIVED_FIELDS = PACKET_DERIVED_FIELDS;
+DesktopSeedRecord.BATCH_DETAIL_FIELDS = BATCH_DETAIL_FIELDS;
 DesktopSeedRecord.TEXT_MAX_LENGTH = TEXT_MAX_LENGTH;
 
 module.exports = DesktopSeedRecord;

@@ -8,7 +8,7 @@ const { protect } = require('../middleware/authMiddleware');
 const { allowRoles } = require('../middleware/roleMiddleware');
 const { sendServerError } = require('../utils/errorResponse');
 
-const { DATA_FIELDS, PACKET_DERIVED_FIELDS, TEXT_MAX_LENGTH } = DesktopSeedRecord;
+const { DATA_FIELDS, PACKET_DERIVED_FIELDS, BATCH_DETAIL_FIELDS, TEXT_MAX_LENGTH } = DesktopSeedRecord;
 const FIELD_TYPES = new Map(DATA_FIELDS.map(({ field, type }) => [field, type]));
 
 // Every route here requires `protect` — a real, active account in the Admin
@@ -115,16 +115,40 @@ function hasAnyValue(clean) {
 //     counted as "already there".
 const PACKET_SCAN_BATCH = 1000;
 
-// Only PACKET_DERIVED_FIELDS are copied. Weight, Name Of Variety and
-// Varity_Code are left at their blank defaults on purpose — their mapping is
-// unconfirmed — as is every other column.
+const BATCH_SELECT = ['seedType', 'crop', 'year', 'warehouse', 'rack', 'shelf', ...BATCH_DETAIL_FIELDS].join(' ');
+
+const cleanText = (value) => (typeof value === 'string' && value.trim().length <= TEXT_MAX_LENGTH ? value.trim() : '');
+
+// The seed-management details saved with the batch, for the columns that
+// have one. A column is set only when the batch really holds a value of the
+// right type; everything else — every column of a batch created before these
+// details existed — is left out and so stays at its blank default.
+function batchDetails(batch) {
+  const out = {};
+  if (!batch) return out;
+  for (const field of BATCH_DETAIL_FIELDS) {
+    const value = batch[field];
+    if (FIELD_TYPES.get(field) === 'number') {
+      if (typeof value === 'number' && Number.isFinite(value)) out[field] = value;
+    } else if (cleanText(value)) {
+      out[field] = cleanText(value);
+    }
+  }
+  return out;
+}
+
+// PACKET_DERIVED_FIELDS plus the batch's saved details are copied. Crop is
+// the batch's own Crop when one was entered, otherwise its seed name as
+// before. Weight is left at its blank default on purpose — its mapping is
+// unconfirmed — as is every column the batch has no value for.
 function recordFromPacket(packet, createdBy) {
   const batch = packet.batchId && typeof packet.batchId === 'object' ? packet.batchId : null;
   return {
     recordId:       `PKT-${packet.uniqueId}`,
     packetUniqueId: packet.uniqueId,
     version:        1,
-    crop:           batch && typeof batch.seedType === 'string' ? batch.seedType.trim() : '',
+    ...batchDetails(batch),
+    crop:           batch ? (cleanText(batch.crop) || (typeof batch.seedType === 'string' ? batch.seedType.trim() : '')) : '',
     year:           batch && typeof batch.year === 'number' ? batch.year : null,
     warehouse:      batch && typeof batch.warehouse === 'string' ? batch.warehouse.trim() : '',
     rackShelf:      batch ? [batch.rack, batch.shelf].map((v) => (typeof v === 'string' ? v.trim() : '')).filter(Boolean).join('-') : '',
@@ -162,7 +186,7 @@ async function importMissingPackets(createdBy) {
       .sort({ _id: 1 })
       .limit(PACKET_SCAN_BATCH)
       .select('uniqueId batchId')
-      .populate('batchId', 'seedType year warehouse rack shelf')
+      .populate('batchId', BATCH_SELECT)
       .lean();
     if (!packets.length) break;
     totalPackets += packets.length;

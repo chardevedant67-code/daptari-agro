@@ -378,6 +378,18 @@ describe('desktop records — PUT /:recordId (update with version check)', () =>
 });
 
 const batch = { seedType: ' Soybean ', year: 2025, warehouse: 'Warehouse B', rack: 'R3', shelf: 'S1', batchName: 'JS-335 Lot', seedCode: 'SOYB' };
+// A batch created with every seed-management detail filled in (as lean
+// documents come back from MongoDB). Total deliberately differs from
+// Yield 1 + Yield 2.
+const detailedBatch = {
+  seedType: 'Maize hybrid', crop: 'Maize', year: 2026, warehouse: 'Warehouse A', rack: 'Rack 1', shelf: 'Shelf 2',
+  batchName: 'Maize hybrid BA-09', seedCode: 'MA',
+  previousYear: 2025, yearCode: 'Y26', previousYearCode: 'Y25', farmLocationCode: 'FL-07',
+  femaleCode: 'F-101', maleCode: 'M-202', sptScore: '7/9', diseaseScore: 'MR',
+  yield1: 41.5, yield2: 38.25, total: 99, varietyName: 'DKC-9144', varietyCode: 'V-9144',
+  previousLocationCode: 'PL-03', locationCode: 'LC-11', gene: 'Rf1', comments: 'Trial lot', finalReport: 'Advance',
+};
+
 const packetsFixture = [
   { uniqueId: 'PRD-SOYB01-001', batchId: batch, difference: 1.25, afterWeight: 2.5, beforeWeight: 1.25, status: 'filled' },
   { uniqueId: 'PRD-SOYB01-002', batchId: batch, status: 'empty' },
@@ -409,7 +421,49 @@ describe('desktop records — existing packets are made available automatically 
     assert.equal(inserted().length, 3);
   });
 
-  it('copies only Crop, Year, Wearhouse and Rack_shelf', async () => {
+  it('a batch saved with seed-management details: every entered value reaches its own column', async () => {
+    usePackets([{ uniqueId: 'PRD-MAIZ01-001', batchId: detailedBatch }]);
+    await call('get', '/', { headers: asRole('admin') });
+    const doc = inserted()[0];
+    assert.equal(doc.crop, 'Maize');            // the batch's Crop, not its seed name
+    assert.equal(doc.year, 2026);
+    assert.equal(doc.warehouse, 'Warehouse A');
+    assert.equal(doc.rackShelf, 'Rack 1-Shelf 2');
+    for (const field of DesktopSeedRecord.BATCH_DETAIL_FIELDS) {
+      assert.equal(doc[field], detailedBatch[field], field);
+    }
+    assert.equal(doc.total, 99, 'Total is the entered value, not Yield 1 + Yield 2');
+    assert.equal(doc.varietyName, 'DKC-9144');
+    assert.equal(doc.varietyCode, 'V-9144');
+    assert.equal('weight' in doc, false, 'Weight is still never pre-filled');
+    // Mongoose accepts the document as built — nothing violates the schema.
+    assert.equal(new DesktopSeedRecord(doc).validateSync(), undefined);
+  });
+
+  it('a partly filled batch copies only what was entered — blanks, wrong types and over-long text are skipped', async () => {
+    const partial = { seedType: 'Rice', crop: '   ', gene: ' Xa21 ', yield1: 0, yield2: '7', sptScore: '', comments: 'x'.repeat(2001), total: NaN };
+    usePackets([{ uniqueId: 'PRD-RICE01-001', batchId: partial }]);
+    await call('get', '/', { headers: asRole('admin') });
+    const doc = inserted()[0];
+    assert.equal(doc.crop, 'Rice', 'a blank Crop falls back to the seed name, as before');
+    assert.equal(doc.gene, 'Xa21');
+    assert.equal(doc.yield1, 0, 'a real zero is a value');
+    for (const skipped of ['yield2', 'sptScore', 'comments', 'total', 'varietyName', 'varietyCode']) {
+      assert.equal(skipped in doc, false, `${skipped} must be left blank`);
+    }
+  });
+
+  it('nothing is derived: seed name, seed code and batch name never become Name Of Variety or Varity_Code', async () => {
+    usePackets(packetsFixture);
+    await call('get', '/', { headers: asRole('admin') });
+    const doc = inserted()[0];
+    assert.equal(batch.batchName, 'JS-335 Lot');
+    assert.equal(batch.seedCode, 'SOYB');
+    assert.equal('varietyName' in doc, false);
+    assert.equal('varietyCode' in doc, false);
+  });
+
+  it('a batch without seed-management details copies only Crop, Year, Wearhouse and Rack_shelf', async () => {
     usePackets(packetsFixture);
     await call('get', '/', { headers: asRole('admin') });
     const doc = inserted()[0];
@@ -455,7 +509,7 @@ describe('desktop records — existing packets are made available automatically 
     assert.deepEqual(scan.sort, { _id: 1 });
     assert.equal(scan.limit, 1000);
     assert.equal(scan.select, 'uniqueId batchId');
-    assert.deepEqual(scan.populate, ['batchId', 'seedType year warehouse rack shelf']);
+    assert.deepEqual(scan.populate, ['batchId', ['seedType', 'crop', 'year', 'warehouse', 'rack', 'shelf', ...DesktopSeedRecord.BATCH_DETAIL_FIELDS].join(' ')]);
   });
 
   it('the existing-packet step runs before the listing, so a first listing already contains them', async () => {
@@ -825,11 +879,31 @@ describe('desktop records — the 23-column contract', () => {
     }
   });
 
-  it('the unconfirmed mappings are not among the packet-derived columns', () => {
+  it('the columns fixed to the batch are unchanged, and Weight is pre-filled from nowhere', () => {
     assert.deepEqual(DesktopSeedRecord.PACKET_DERIVED_FIELDS, ['crop', 'year', 'warehouse', 'rackShelf']);
-    for (const blank of ['weight', 'varietyName', 'varietyCode']) {
-      assert.equal(DesktopSeedRecord.PACKET_DERIVED_FIELDS.includes(blank), false);
+    for (const editable of ['weight', 'varietyName', 'varietyCode']) {
+      assert.equal(DesktopSeedRecord.PACKET_DERIVED_FIELDS.includes(editable), false);
     }
+    assert.equal(DesktopSeedRecord.BATCH_DETAIL_FIELDS.includes('weight'), false);
+  });
+
+  it('every column is accounted for: fixed to the batch, pre-filled from its details, or Weight', () => {
+    const covered = [...DesktopSeedRecord.PACKET_DERIVED_FIELDS, ...DesktopSeedRecord.BATCH_DETAIL_FIELDS, 'weight'];
+    assert.deepEqual([...covered].sort(), DesktopSeedRecord.DATA_FIELDS.map((f) => f.field).sort());
+    assert.equal(new Set(covered).size, 23);
+  });
+
+  it('each pre-filled column is a batch detail of the same name and type', () => {
+    const SeedBatch = require('../models/SeedBatch');
+    const types = new Map(DesktopSeedRecord.DATA_FIELDS.map((f) => [f.field, f.type]));
+    for (const field of [...DesktopSeedRecord.BATCH_DETAIL_FIELDS, 'crop']) {
+      const detail = SeedBatch.DETAIL_FIELDS.find((d) => d.field === field);
+      assert.ok(detail, `${field} is not a batch detail`);
+      assert.equal(detail.type, types.get(field), `${field} type`);
+      assert.equal(detail.label, DesktopSeedRecord.DATA_FIELDS.find((f) => f.field === field).header, `${field} header`);
+    }
+    assert.equal(SeedBatch.DETAIL_FIELDS.length, DesktopSeedRecord.BATCH_DETAIL_FIELDS.length + 1);
+    assert.equal(SeedBatch.DETAIL_TEXT_MAX_LENGTH, DesktopSeedRecord.TEXT_MAX_LENGTH);
   });
 });
 

@@ -8,6 +8,38 @@ const { allowRoles } = require('../middleware/roleMiddleware');
 const { uploadQrPng, deleteQrFile } = require('../utils/qrStorage');
 const { sendServerError } = require('../utils/errorResponse');
 
+const { DETAIL_FIELDS, DETAIL_TEXT_MAX_LENGTH } = SeedBatch;
+
+// Validates the optional seed-management details of a new batch (see
+// DETAIL_FIELDS in SeedBatch.js). Nothing is required and nothing is derived:
+// a field that was not sent is stored blank, and Total is whatever was
+// entered. Only plain text / finite numbers get through, so an object or
+// array can never reach the database. Returns { clean } or { error }.
+function parseDetailFields(body) {
+  const clean = {};
+  for (const { field, label, type } of DETAIL_FIELDS) {
+    const value = body[field];
+    const blank = value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
+    if (type === 'number') {
+      if (blank) { clean[field] = null; continue; }
+      const parsed = typeof value === 'number' ? value : (typeof value === 'string' ? Number(value.trim()) : NaN);
+      if (!Number.isFinite(parsed)) return { error: `${label} must be a number` };
+      clean[field] = parsed;
+    } else {
+      if (blank) { clean[field] = ''; continue; }
+      if (typeof value !== 'string' && !(typeof value === 'number' && Number.isFinite(value))) {
+        return { error: `${label} must be text` };
+      }
+      const text = String(value).trim();
+      if (text.length > DETAIL_TEXT_MAX_LENGTH) {
+        return { error: `${label} must be at most ${DETAIL_TEXT_MAX_LENGTH} characters` };
+      }
+      clean[field] = text;
+    }
+  }
+  return { clean };
+}
+
 // Public base URL that gets encoded into every packet's QR code (the
 // /scan/:uniqueId destination a phone opens on scan) — NOT the qrCodeUrl
 // path the PNG is stored at, which is unrelated and untouched by this.
@@ -70,6 +102,13 @@ router.post('/', protect, allowRoles('superadmin', 'admin'), async (req, res) =>
       return res.status(400).json({ success: false, message: 'year must be a number' });
     }
 
+    // Seed-management details — also checked before any write, so a rejected
+    // value never leaves a batch or QR file behind.
+    const { clean: details, error: detailError } = parseDetailFields(req.body);
+    if (detailError) {
+      return res.status(400).json({ success: false, message: detailError });
+    }
+
     const SC = seedCode.toUpperCase().replace(/[^A-Z0-9]/g, '');
     const BC = batchCode.toUpperCase().replace(/[^A-Z0-9]/g, '');
 
@@ -79,6 +118,7 @@ router.post('/', protect, allowRoles('superadmin', 'admin'), async (req, res) =>
       count: total, createdBy: req.admin._id,
       month: parsedMonth, year: parsedYear,
       warehouse: warehouse || '', rack: rack || '', shelf: shelf || '',
+      ...details,
     });
 
     // Generate all QR PNGs in parallel (much faster than sequential), each
@@ -140,6 +180,8 @@ router.post('/', protect, allowRoles('superadmin', 'admin'), async (req, res) =>
         warehouse: batch.warehouse,
         rack:      batch.rack,
         shelf:     batch.shelf,
+        // The details as stored, so the form can confirm what was saved.
+        ...Object.fromEntries(DETAIL_FIELDS.map(({ field }) => [field, batch[field]])),
         createdAt: batch.createdAt,
       },
       packets: created.map(p => ({ uniqueId: p.uniqueId, qrCodeUrl: p.qrCodeUrl })),
