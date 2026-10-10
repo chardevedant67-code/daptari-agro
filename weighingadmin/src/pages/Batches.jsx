@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import {
   Box, Button, Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, Typography, Chip, IconButton, Tooltip, CircularProgress,
-  Grid, InputAdornment, LinearProgress, Avatar, Alert,
+  Grid, InputAdornment, LinearProgress, Avatar, Alert, Snackbar,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
@@ -19,6 +19,7 @@ import ImageIcon from '@mui/icons-material/Image';
 import Layout from '../components/Layout';
 import PageHeader from '../components/PageHeader';
 import NewBatchDialog from '../components/NewBatchDialog';
+import { BATCH_DETAIL_FIELDS } from '../components/batchDetailFields';
 import { batchAPI } from '../services/api';
 
 // Same hardcoded API host already used elsewhere in this app for resolving
@@ -45,6 +46,7 @@ export default function Batches() {
   const [batches, setBatches]         = useState([]);
   const [loading, setLoading]         = useState(true);
   const [createOpen, setCreateOpen]   = useState(false);
+  const [successMsg, setSuccessMsg]   = useState('');
   // QR drawer state
   const [qrBatch,    setQrBatch]    = useState(null);
   const [packets,    setPackets]    = useState([]);
@@ -445,6 +447,24 @@ export default function Batches() {
                     ))}
                   </Grid>
 
+                  {/* Seed-management details saved with the batch — read straight
+                      from the SeedBatch document; blank where nothing was entered. */}
+                  <Typography sx={{ fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.08em', mb: 1 }}>SEED MANAGEMENT DETAILS</Typography>
+                  <Grid container spacing={1.2} sx={{ mb: 2.5 }}>
+                    {BATCH_DETAIL_FIELDS.map(f => {
+                      const value = detailBatch[f.name];
+                      const shown = value === null || value === undefined || value === '' ? '—' : String(value);
+                      return (
+                        <Grid size={{ xs: 12, sm: f.multiline ? 12 : 6, md: f.multiline ? 6 : 3 }} key={f.name}>
+                          <Box sx={{ background: '#f8fafc', borderRadius: 2, px: 1.2, py: 0.8, border: '1px solid #f1f5f9', height: '100%' }}>
+                            <Typography sx={{ fontSize: 9, color: '#64748b', fontWeight: 700, letterSpacing: '0.04em' }}>{f.label}</Typography>
+                            <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#0f172a', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{shown}</Typography>
+                          </Box>
+                        </Grid>
+                      );
+                    })}
+                  </Grid>
+
                   <TextField
                     size="small" fullWidth placeholder="Search Packet ID…"
                     value={packetSearch} onChange={e => setPacketSearch(e.target.value)}
@@ -526,8 +546,19 @@ export default function Batches() {
       <NewBatchDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onCreated={fetchBatches}
+        onCreated={(data) => {
+          // Only ever called after a real successful POST /api/batches.
+          setSuccessMsg(`${data.batch.batchName} saved — ${data.message}`);
+          fetchBatches();
+        }}
       />
+
+      <Snackbar open={!!successMsg} autoHideDuration={5000} onClose={() => setSuccessMsg('')}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
+        <Alert severity="success" onClose={() => setSuccessMsg('')} sx={{ borderRadius: 2 }}>
+          {successMsg}
+        </Alert>
+      </Snackbar>
     </Layout>
   );
 }

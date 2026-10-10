@@ -2,10 +2,12 @@ import { useState } from 'react';
 import {
   Box, Button, Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, Typography, Chip, CircularProgress, Grid,
-  MenuItem,
+  MenuItem, Accordion, AccordionSummary, AccordionDetails,
 } from '@mui/material';
 import QrCode2Icon from '@mui/icons-material/QrCode2';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { batchAPI } from '../services/api';
+import { BATCH_DETAIL_SECTIONS, BATCH_DETAIL_FIELDS, BATCH_DETAIL_TEXT_MAX, buildBatchDetails } from './batchDetailFields';
 
 // Shared with the Batches page's "New Batch" flow (and now Products' "New
 // Batch" button) so there is exactly one implementation of batch creation —
@@ -26,6 +28,8 @@ const SEED_PRESETS = [
 const EMPTY_FORM = {
   seedType: '', seedCategory: '', seedCode: '', batchNumber: '', batchCode: '', count: '',
   month: '', year: '', warehouse: '', rack: '', shelf: '',
+  // Seed-management details — all optional, all start blank.
+  ...Object.fromEntries(BATCH_DETAIL_FIELDS.map(f => [f.name, ''])),
 };
 
 const WAREHOUSE_OPTIONS = ['Warehouse A', 'Warehouse B', 'Warehouse C'];
@@ -70,6 +74,8 @@ export default function NewBatchDialog({ open, onClose, onCreated }) {
     if (!form.batchCode)   missing.push('Batch Code');
     if (!form.count)       missing.push('Count');
     if (missing.length > 0) { setCreateError(`Fill: ${missing.join(', ')}`); return; }
+    const { details, error: detailError } = buildBatchDetails(form);
+    if (detailError) { setCreateError(detailError); return; }
     try {
       setCreating(true);
       const res = await batchAPI.create({
@@ -85,8 +91,11 @@ export default function NewBatchDialog({ open, onClose, onCreated }) {
         warehouse:   form.warehouse,
         rack:        form.rack,
         shelf:       form.shelf,
+        ...details,
       });
-      if (!res.data.success) throw new Error(res.data.message);
+      // Success is reported only when the backend returns the batch it
+      // actually stored — never on the strength of the request alone.
+      if (!res.data.success || !res.data.batch?._id) throw new Error(res.data.message || 'The server did not confirm the batch was saved');
       setForm(EMPTY_FORM);
       setCreateError('');
       onCreated?.(res.data);
@@ -208,6 +217,38 @@ export default function NewBatchDialog({ open, onClose, onCreated }) {
             </TextField>
           </Grid>
         </Grid>
+
+        <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', mt: 2.5, mb: 1, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+          Seed Management Details (optional)
+        </Typography>
+        {BATCH_DETAIL_SECTIONS.map(section => {
+          const filled = section.fields.filter(f => String(form[f.name]).trim() !== '').length;
+          return (
+            <Accordion key={section.title} disableGutters elevation={0}
+              sx={{ border: '1px solid #e2e8f0', borderRadius: '8px !important', mb: 1, '&:before': { display: 'none' } }}>
+              <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: 44, '& .MuiAccordionSummary-content': { alignItems: 'center', gap: 1, my: 0.5 } }}>
+                <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>{section.title}</Typography>
+                <Typography sx={{ fontSize: 11, fontWeight: 600, color: filled ? '#1a227f' : '#94a3b8' }}>
+                  {filled} of {section.fields.length} filled
+                </Typography>
+              </AccordionSummary>
+              <AccordionDetails sx={{ pt: 0.5 }}>
+                <Grid container spacing={2}>
+                  {section.fields.map(f => (
+                    <Grid key={f.name} size={{ xs: 12, sm: f.multiline ? 12 : 6 }}>
+                      <TextField fullWidth label={f.label} name={f.name} value={form[f.name]}
+                        onChange={handleChange} size="small"
+                        type={f.type === 'number' ? 'number' : 'text'}
+                        multiline={!!f.multiline} minRows={f.multiline ? 2 : undefined}
+                        placeholder={f.placeholder} helperText={f.helperText}
+                        inputProps={f.type === 'number' ? { step: 'any' } : { maxLength: BATCH_DETAIL_TEXT_MAX }} />
+                    </Grid>
+                  ))}
+                </Grid>
+              </AccordionDetails>
+            </Accordion>
+          );
+        })}
 
         {previewId && (
           <Box sx={{ mt: 2, p: 1.5, background: '#f0f4ff', borderRadius: 2, border: '1px solid #c7d2fe' }}>
