@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WeighingQR — Smart Seed Packet Weighing &amp; QR Tracking</title>
+  <meta name="description" content="WeighingQR identifies seed packets by QR code, captures before-and-after weights, tracks weight differences and keeps measurement records. Download the Android app and the Windows desktop app.">
+  <meta name="theme-color" content="#1a227f">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="WeighingQR — Smart Seed Packet Weighing &amp; QR Tracking">
+  <meta property="og:description" content="Identify seed packets, capture before-and-after weights, track weight differences and access measurement records.">
+  <link rel="icon" type="image/png" href="assets/weighingqr-icon.png">
+  <link rel="apple-touch-icon" href="assets/weighingqr-icon.png">
+  <link rel="stylesheet" href="styles/tokens.css">
+  <link rel="stylesheet" href="styles/main.css">
+  <script>document.documentElement.classList.add('js');</script>
+  <script type="module" src="js/main.js"></script>
+</head>
+<body>
+  <!-- Icon set drawn for this site; each icon below is referenced by its id. -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <defs>
+      <symbol id="i-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+      <symbol id="i-android" viewBox="0 0 24 24" fill="currentColor"><path d="M7.2 4.1l-1-1.7a.4.4 0 0 1 .7-.4l1 1.7A7.9 7.9 0 0 1 12 2.9c1.5 0 2.9.3 4.1.8l1-1.7a.4.4 0 0 1 .7.4l-1 1.7A6.6 6.6 0 0 1 20.2 10H3.8a6.6 6.6 0 0 1 3.4-5.9zM8.6 7.6a.9.9 0 1 0 0-1.8.9.9 0 0 0 0 1.8zm6.8 0a.9.9 0 1 0 0-1.8.9.9 0 0 0 0 1.8zM3.8 11.2h16.4v7.3c0 .9-.7 1.6-1.6 1.6h-1.2v2.4a1.3 1.3 0 0 1-2.6 0v-2.4h-1.9v2.4a1.3 1.3 0 0 1-2.6 0v-2.4H8.4v-.1H5.4c-.9 0-1.6-.7-1.6-1.6zM1.6 11.2a1.3 1.3 0 0 1 1.3 1.3v5a1.3 1.3 0 0 1-2.6 0v-5a1.3 1.3 0 0 1 1.3-1.3zm20.8 0a1.3 1.3 0 0 1 1.3 1.3v5a1.3 1.3 0 0 1-2.6 0v-5a1.3 1.3 0 0 1 1.3-1.3z"/></symbol>
+      <symbol id="i-windows" viewBox="0 0 24 24" fill="currentColor"><path d="M2.5 4.6l8.1-1.1v7.8H2.5zm9.1-1.3L21.5 2v9.3h-9.9zM2.5 12.6h8.1v7.9l-8.1-1.1zm9.1 0h9.9V22l-9.9-1.4z"/></symbol>
+      <symbol id="i-qr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V4a1 1 0 0 1 1-1h3M17 3h3a1 1 0 0 1 1 1v3M21 17v3a1 1 0 0 1-1 1h-3M7 21H4a1 1 0 0 1-1-1v-3"/><rect x="7" y="7" width="4" height="4" rx=".5"/><rect x="13" y="7" width="4" height="4" rx=".5"/><rect x="7" y="13" width="4" height="4" rx=".5"/><path d="M13 13h1.5v1.5H13zM15.5 15.5H17V17h-1.5zM13 16h1M16 13h1"/></symbol>
+      <symbol id="i-scale" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v17M7 20h10M5 7h14M12 5.2a1.6 1.6 0 1 0 0-.1"/><path d="M5 7l-3 6a3 3 0 0 0 6 0zM19 7l-3 6a3 3 0 0 0 6 0z"/></symbol>
+      <symbol id="i-diff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 20V5M3.5 8.5L7 5l3.5 3.5M17 4v15M13.5 15.5L17 19l3.5-3.5"/></symbol>
+      <symbol id="i-history" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/><path d="M3 4v4h4M12 8v4.5l3 2"/></symbol>
+      <symbol id="i-chart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16M7 16v-5M12 16V7M17 16v-8"/></symbol>
+      <symbol id="i-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3h0a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8v0a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></symbol>
+      <symbol id="i-box" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8M12 13v8"/></symbol>
+      <symbol id="i-cloud" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4.5 4.5 0 0 1-.6-9A6 6 0 0 1 18 9.5a4.3 4.3 0 0 1-.5 8.5z"/><path d="M9.5 13.5l2 2 3.5-3.5"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+      <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.01"/></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17v.01"/></symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+      <symbol id="i-home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></symbol>
+      <symbol id="i-camera" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></symbol>
+    </defs>
+  </svg>
+
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <div class="container site-header__inner">
+      <a class="brand" href="#home" aria-label="WeighingQR home">
+        <img src="assets/weighingqr-icon.png" alt="" width="38" height="38">
+        <span>Weighing<b>QR</b></span>
+      </a>
+      <button class="nav-toggle" type="button" data-nav-toggle aria-controls="site-menu" aria-expanded="false" aria-label="Open menu">
+        <svg class="icon-open" aria-hidden="true"><use href="#i-menu"/></svg>
+        <svg class="icon-close" aria-hidden="true"><use href="#i-close"/></svg>
+      </button>
+      <nav class="site-nav" id="site-menu" aria-label="Main">
+        <a href="#home">Home</a>
+        <a href="#features">Features</a>
+        <a href="#how-it-works">How it works</a>
+        <a href="#downloads">Downloads</a>
+        <a href="#install">Installation guide</a>
+        <a href="#faq">FAQ</a>
+        <a class="btn btn--navy" href="#downloads">Get the apps</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- ── Hero ─────────────────────────────────────────────────────────── -->
+    <section class="hero" id="home" aria-labelledby="hero-title">
+      <div class="container hero__grid">
+        <div class="hero__copy">
+          <span class="hero__badge"><img src="assets/weighingqr-icon.png" alt="" width="26" height="26"> WeighingQR · Seed packet weighing system</span>
+          <h1 id="hero-title">Smart Seed Packet Weighing <span class="accent">&amp; QR Tracking</span></h1>
+          <p class="hero__lead">Identify seed packets, capture before-and-after weights, track weight differences and access measurement records through a connected weighing workflow.</p>
+          <div class="hero__actions">
+            <a class="btn btn--primary btn--lg" href="#download-android" data-download-link="android">
+              <svg aria-hidden="true"><use href="#i-android"/></svg> Download Android App
+            </a>
+            <a class="btn btn--navy btn--lg" href="#download-windows" data-download-link="windows">
+              <svg aria-hidden="true"><use href="#i-windows"/></svg> Download Windows Desktop App
+            </a>
+          </div>
+          <div class="hero__secondary">
+            <a class="btn btn--ghost" href="#features">Explore Features <svg aria-hidden="true"><use href="#i-arrow"/></svg></a>
+          </div>
+          <ul class="hero__facts">
+            <li><svg aria-hidden="true"><use href="#i-check"/></svg> QR-identified seed packets</li>
+            <li><svg aria-hidden="true"><use href="#i-check"/></svg> Before &amp; after weights with photos</li>
+            <li><svg aria-hidden="true"><use href="#i-check"/></svg> History &amp; analytics</li>
+          </ul>
+        </div>
+
+        <figure class="preview" aria-labelledby="preview-caption">
+          <div class="preview__glow" aria-hidden="true"></div>
+          <div class="preview__stage">
+          <div class="phone" role="img" aria-label="Illustration of the WeighingQR app Dashboard: system online status, measurement totals, Weigh and Record, Product Info and recent records.">
+            <div class="phone__screen" aria-hidden="true">
+              <div class="phone__notch"></div>
+              <div class="app-top">
+                <small>WELCOME BACK</small>
+                <strong>Dashboard</strong>
+                <span class="app-online"><i></i> System Online</span>
+              </div>
+              <div class="app-body">
+                <div class="app-stats">
+                  <div class="app-stat"><span>Total Measurements</span><b>128</b></div>
+                  <div class="app-stat"><span>Active Sessions</span><b>2</b></div>
+                </div>
+                <div class="app-tile app-tile--navy">
+                  <span class="app-tile__icon"><svg><use href="#i-scale"/></svg></span>
+                  <div><b>Weigh &amp; Record</b><span>Photo + QR scan + weight capture</span></div>
+                </div>
+                <div class="app-tile app-tile--green">
+                  <span class="app-tile__icon"><svg><use href="#i-qr"/></svg></span>
+                  <div><b>Product Info</b><span>Scan QR to view product details</span></div>
+                </div>
+                <div class="app-section-title">Recent Records</div>
+                <div class="app-record"><div><b>Soybean</b><br>Seed Packet</div><em>+1.25 kg</em></div>
+                <div class="app-record"><div><b>Wheat</b><br>Seed Packet</div><em>+0.80 kg</em></div>
+              </div>
+              <div class="app-tabs">
+                <span class="is-active"><svg><use href="#i-home"/></svg>Home</span>
+                <span><svg><use href="#i-history"/></svg>History</span>
+                <span><svg><use href="#i-chart"/></svg>Analytics</span>
+                <span><svg><use href="#i-settings"/></svg>Settings</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="float-card float-card--steps" aria-hidden="true">
+            <h4>Weigh &amp; Record</h4>
+            <ol>
+              <li class="done"><span>✓</span> Scan QR</li>
+              <li class="done"><span>✓</span> Before weight</li>
+              <li class="done"><span>✓</span> Before photo</li>
+              <li><span>4</span> After weight</li>
+              <li><span>5</span> After photo</li>
+            </ol>
+          </div>
+          <div class="float-card float-card--weights" aria-hidden="true">
+            <h4>Measurement</h4>
+            <dl>
+              <dt>Before</dt><dd>0.50 kg</dd>
+              <dt>After</dt><dd>1.75 kg</dd>
+              <dt>Difference</dt><dd class="diff">+1.25 kg</dd>
+            </dl>
+          </div>
+          </div>
+          <figcaption class="preview__caption" id="preview-caption">Illustration based on the app's Dashboard and Weigh &amp; Record screens, with example values. Not a live screenshot.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- ── Features ─────────────────────────────────────────────────────── -->
+    <section class="section section--white" id="features" aria-labelledby="features-title">
+      <div class="container">
+        <div class="section-head section-head--center" data-reveal>
+          <span class="eyebrow">Features</span>
+          <h2 id="features-title">Everything the weighing workflow needs</h2>
+          <p>What the WeighingQR mobile app does today, from identifying a packet to reviewing its records.</p>
+        </div>
+        <div class="feature-grid">
+          <article class="feature-card" data-reveal>
+            <span class="feature-card__icon"><svg aria-hidden="true"><use href="#i-qr"/></svg></span>
+            <h3>Product QR Scanning</h3>
+            <p>Identify each seed packet by scanning the QR code printed on it with the phone's camera.</p>
+          </article>
+          <article class="feature-card feature-card--green" data-reveal>
+            <span class="feature-card__icon"><svg aria-hidden="true"><use href="#i-scale"/></svg></span>
+            <h3>Before &amp; After Weight</h3>
+            <p>Record the packet before filling and the filled packet after, each with a photo. Type the weight or read it from the scale display with the camera.</p>
+          </article>
+          <article class="feature-card" data-reveal>
+            <span class="feature-card__icon"><svg aria-hidden="true"><use href="#i-diff"/></svg></span>
+            <h3>Weight Difference</h3>
+            <p>The difference between the after and before weights is calculated and saved with the record.</p>
+          </article>
+          <article class="feature-card feature-card--green" data-reveal>
+            <span class="feature-card__icon"><svg aria-hidden="true"><use href="#i-history"/></svg></span>
+            <h3>Measurement History</h3>
+            <p>The History tab lists saved weight records with their totals and the average difference.</p>
+          </article>
+          <article class="feature-card" data-reveal>
+            <span class="feature-card__icon"><svg aria-hidden="true"><use href="#i-chart"/></svg></span>
+            <h3>Analytics</h3>
+            <p>Review total and completed measurements, average and minimum/maximum difference, and the difference by seed type.</p>
+          </article>
+          <article class="feature-card feature-card--green" data-reveal>
+            <span class="feature-card__icon"><svg aria-hidden="true"><use href="#i-settings"/></svg></span>
+            <h3>Settings &amp; Connection</h3>
+            <p>Edit your profile, check whether the server connection is live and view the configured server address.</p>
+          </article>
+          <article class="feature-card" data-reveal>
+            <span class="feature-card__icon"><svg aria-hidden="true"><use href="#i-box"/></svg></span>
+            <h3>Product Information</h3>
+            <p>Scan a packet to see its seed type, batch, storage location and, once weighed, its before, after and difference values.</p>
+          </article>
+          <article class="feature-card feature-card--green" data-reveal>
+            <span class="feature-card__icon"><svg aria-hidden="true"><use href="#i-cloud"/></svg></span>
+            <h3>Connected Data</h3>
+            <p>Measurements are saved to the WeighingQR server when the connection is working, so they appear in the admin dashboard and the desktop app.</p>
+          </article>
+        </div>
+        <p class="feature-note" data-reveal>This website explains and distributes the apps. Weighing and QR scanning happen in the apps, not on this website.</p>
+      </div>
+    </section>
+
+    <!-- ── How it works ─────────────────────────────────────────────────── -->
+    <section class="section section--lavender" id="how-it-works" aria-labelledby="flow-title">
+      <div class="container">
+        <div class="section-head section-head--center" data-reveal>
+          <span class="eyebrow">How it works</span>
+          <h2 id="flow-title">From QR code to measurement record</h2>
+          <p>Every packet follows the same path in the Weigh &amp; Record workflow.</p>
+        </div>
+        <ol class="flow" data-reveal>
+          <li><b>Product QR Scan</b><span>Scan the packet's QR code</span></li>
+          <li><b>Product Identification</b><span>The packet and its batch are looked up on the server</span></li>
+          <li><b>Before Weight</b><span>Weigh the empty packet, then take a photo</span></li>
+          <li><b>After Weight</b><span>Weigh the filled packet, then take a photo</span></li>
+          <li><b>Weight Difference</b><span>After minus before is calculated</span></li>
+          <li><b>Save Record</b><span>Saved to the server and linked to the packet</span></li>
+          <li><b>History &amp; Analytics</b><span>Review records and statistics</span></li>
+        </ol>
+        <div class="callout" data-reveal>
+          <svg aria-hidden="true"><use href="#i-info"/></svg>
+          <p>Records are stored online only when the app can reach the WeighingQR server and the save succeeds. The app shows the connection state on the Dashboard and in Settings, and confirms each saved measurement.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Downloads ────────────────────────────────────────────────────── -->
+    <section class="section section--white" id="downloads" aria-labelledby="downloads-title">
+      <div class="container">
+        <div class="section-head section-head--center" data-reveal>
+          <span class="eyebrow">Downloads</span>
+          <h2 id="downloads-title">Two apps, two separate downloads</h2>
+          <p>The Android app is for weighing and scanning on a phone. The Windows app is the desktop records manager for admin accounts. Each has its own installer.</p>
+        </div>
+
+        <div class="download-grid">
+          <article class="download-card download-card--android" id="download-android" data-download-card="android" data-reveal aria-labelledby="dl-android-title">
+            <div class="download-card__head">
+              <span class="platform-icon"><svg aria-hidden="true"><use href="#i-android"/></svg></span>
+              <div>
+                <small>Mobile · Android</small>
+                <h3 id="dl-android-title">WeighingQR for Android</h3>
+              </div>
+            </div>
+            <p class="download-card__desc">The weighing app: scan packet QR codes, record before and after weights with photos, and review history and analytics.</p>
+            <dl class="spec">
+              <dt>Format</dt><dd><span data-field="format">APK</span> · <span class="mono" data-field="fileName">WeighingQR-Android-1.0.apk</span></dd>
+              <dt>Version</dt><dd data-field="version">1.0 (build 1)</dd>
+              <dt>Size</dt><dd data-field="size">312 MB</dd>
+              <dt>Requires</dt><dd data-field="requirements">Android 7.0 or later, a camera and internet access.</dd>
+            </dl>
+            <div class="download-card__action" data-download-action>
+              <button class="btn btn--lg btn--disabled" type="button" disabled>Download Android APK</button>
+            </div>
+            <p class="download-status" id="download-android-status" data-download-status role="status">Checking download link…</p>
+            <p class="dev-hint" data-dev-hint hidden></p>
+            <noscript><p class="download-status">Turn on JavaScript to see whether this download is available.</p></noscript>
+            <p class="download-card__note"><span data-field="note">Signed release build. Compatibility depends on your device.</span> After downloading, Android may ask you to allow installation from your browser or file manager.</p>
+            <details class="checksum">
+              <summary>Verify the file (SHA-256)</summary>
+              <div class="checksum__value">
+                <code id="sha-android" data-field="sha256">833daebd3fd3d5da4a0a29b0ebd4009ba5777ecc1afa59c7ef8182a619e75f99</code>
+                <button type="button" data-copy-target="sha-android">Copy</button>
+              </div>
+            </details>
+            <a class="download-card__guide" href="#install-android">Read the Android installation guide →</a>
+          </article>
+
+          <article class="download-card download-card--windows" id="download-windows" data-download-card="windows" data-reveal aria-labelledby="dl-windows-title">
+            <div class="download-card__head">
+              <span class="platform-icon"><svg aria-hidden="true"><use href="#i-windows"/></svg></span>
+              <div>
+                <small>Desktop · Windows PC / laptop</small>
+                <h3 id="dl-windows-title">Seed Management for Windows</h3>
+              </div>
+            </div>
+            <p class="download-card__desc">The desktop records manager: shows the server's seed records, including Before Weight and After Weight from mobile weighings, and keeps them in an Excel workbook.</p>
+            <dl class="spec">
+              <dt>Format</dt><dd><span data-field="format">EXE installer</span> · <span class="mono" data-field="fileName">SeedManagement-Setup-0.1.1.exe</span></dd>
+              <dt>Version</dt><dd data-field="version">0.1.1</dd>
+              <dt>Size</dt><dd data-field="size">111 MB</dd>
+              <dt>Requires</dt><dd data-field="requirements">Windows 10 or 11 (64-bit) and internet access.</dd>
+            </dl>
+            <div class="download-card__action" data-download-action>
+              <button class="btn btn--lg btn--disabled" type="button" disabled>Download Windows App</button>
+            </div>
+            <p class="download-status" id="download-windows-status" data-download-status role="status">Checking download link…</p>
+            <p class="dev-hint" data-dev-hint hidden></p>
+            <noscript><p class="download-status">Turn on JavaScript to see whether this download is available.</p></noscript>
+            <p class="download-card__note"><span data-field="note">The installer is not code-signed, so Windows SmartScreen may show a warning.</span> Sign-in requires an admin account.</p>
+            <details class="checksum">
+              <summary>Verify the file (SHA-256)</summary>
+              <div class="checksum__value">
+                <code id="sha-windows" data-field="sha256">e540aa443f9b90550b0ac915f4dbd9d5e84342bfc957c6e860672f5915890514</code>
+                <button type="button" data-copy-target="sha-windows">Copy</button>
+              </div>
+            </details>
+            <a class="download-card__guide" href="#install-windows">Read the Windows installation guide →</a>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Installation guides ──────────────────────────────────────────── -->
+    <section class="section" id="install" aria-labelledby="install-title">
+      <div class="container">
+        <div class="section-head section-head--center" data-reveal>
+          <span class="eyebrow">Installation guide</span>
+          <h2 id="install-title">Install and start using WeighingQR</h2>
+          <p>Follow the guide for your device. Each app is installed separately.</p>
+        </div>
+        <div class="guide-nav">
+          <a class="btn btn--outline" href="#install-android"><svg aria-hidden="true"><use href="#i-android"/></svg> Android guide</a>
+          <a class="btn btn--outline" href="#install-windows"><svg aria-hidden="true"><use href="#i-windows"/></svg> Windows guide</a>
+        </div>
+
+        <article class="guide guide--android" id="install-android" aria-labelledby="guide-android-title" data-reveal>
+          <div class="guide__head">
+            <span class="platform-icon"><svg aria-hidden="true"><use href="#i-android"/></svg></span>
+            <h3 id="guide-android-title">Android app installation guide</h3>
+          </div>
+          <p class="guide__intro">You need an Android phone with a camera and an internet connection (mobile data or any Wi-Fi).</p>
+
+          <div class="phase">
+            <h4>Install the app</h4>
+            <ol class="steps">
+              <li><span class="step-num" aria-hidden="true">1</span><div><b>Open this website on your Android phone.</b></div></li>
+              <li><span class="step-num" aria-hidden="true">2</span><div><b>Tap <span class="ui-label">Download Android APK</span>.</b><p>You will find it in the Downloads section above.</p></div></li>
+              <li><span class="step-num" aria-hidden="true">3</span><div><b>Wait for the download to finish.</b><p>The file is about 312 MB, so use a good connection.</p></div></li>
+              <li><span class="step-num" aria-hidden="true">4</span><div><b>Open the downloaded APK file.</b><p>Tap the download notification, or open it from the Downloads folder in your file manager.</p></div></li>
+              <li><span class="step-num" aria-hidden="true">5</span><div><b>Allow the installation if Android asks.</b><p>If you see a message about installing unknown apps, open the offered settings and allow it for the browser or file manager you are using, then go back.</p></div></li>
+              <li><span class="step-num" aria-hidden="true">6</span><div><b>Tap <span class="ui-label">Install</span> and wait for it to finish.</b></div></li>
+              <li><span class="step-num" aria-hidden="true">7</span><div><b>Open WeighingQR.</b></div></li>
+            </ol>
+          </div>
+
+          <div class="phase">
+            <h4>Create your account and sign in</h4>
+            <ol class="steps" start="8">
+              <li><span class="step-num" aria-hidden="true">8</span><div><b>Create an account.</b><p>The app opens on the <span class="ui-label">Sign In</span> screen. Tap <span class="ui-label">Create Account</span>, enter your Full Name, Email Address, Password and Confirm Password, then tap <span class="ui-label">Create Account</span>. The app shows “Account created!” and returns to Sign In.</p></div></li>
+              <li><span class="step-num" aria-hidden="true">9</span><div><b>Sign in with the same email address and password.</b><p>The app then opens the Dashboard. Next time, you stay signed in.</p></div></li>
+            </ol>
+          </div>
+
+          <div class="phase">
+            <h4>Weigh and review</h4>
+            <ol class="steps" start="10">
+              <li><span class="step-num" aria-hidden="true">10</span><div><b>Check the server connection on the Dashboard.</b><p>It should show <span class="ui-label">System Online</span>. If it does not, see “What should I do if the server is offline?” in the FAQ.</p></div></li>
+              <li><span class="step-num" aria-hidden="true">11</span><div><b>Choose <span class="ui-label">Weigh &amp; Record</span> or <span class="ui-label">Product Info</span>.</b><p>Weigh &amp; Record captures a new measurement. Product Info only shows a packet's details.</p></div></li>
+              <li><span class="step-num" aria-hidden="true">12</span><div><b>Scan the packet's QR code.</b><p>Allow camera access the first time the app asks.</p></div></li>
+              <li><span class="step-num" aria-hidden="true">13</span><div><b>Capture the before and after weights.</b><p>Weigh the empty packet and enter the weight, typed or read with <span class="ui-label">📷 Scan Scale Display</span> and confirmed, then tap <span class="ui-label">Next — Before Photo</span> and take the photo. Then weigh the filled packet the same way: <span class="ui-label">Continue — After Weight</span>, <span class="ui-label">Next — After Photo</span>.</p></div></li>
+              <li><span class="step-num" aria-hidden="true">14</span><div><b>Save the record.</b><p>Check the after photo, then tap <span class="ui-label">Save Measurement</span>. The app confirms “Saved to the server and linked to this packet” and shows the before, after and difference values.</p></div></li>
+              <li><span class="step-num" aria-hidden="true">15</span><div><b>Review records in <span class="ui-label">History</span> and <span class="ui-label">Analytics</span>.</b></div></li>
+              <li><span class="step-num" aria-hidden="true">16</span><div><b>Use <span class="ui-label">Settings</span> for your profile and the connection status.</b><p>Leave the server address unchanged unless your administrator tells you otherwise.</p></div></li>
+            </ol>
+          </div>
+
+          <div class="notes">
+            <div class="callout"><svg aria-hidden="true"><use href="#i-info"/></svg><p>An internet connection is needed to sign in and to save measurements. You do not need to be on the same Wi-Fi as anyone else; the app connects to the WeighingQR server over the internet.</p></div>
+            <div class="callout callout--amber"><svg aria-hidden="true"><use href="#i-alert"/></svg><p><strong>Already have an older or test version installed?</strong> Android may refuse to install over it. Uninstalling it deletes what that app stored on the phone, including your saved sign-in and server setting. Measurements already saved on the server are not deleted, but finish or note any unsaved work first.</p></div>
+            <div class="callout"><svg aria-hidden="true"><use href="#i-info"/></svg><p>Compatibility depends on the device. The app needs Android 7.0 or later; not every phone model has been tested.</p></div>
+          </div>
+        </article>
+
+        <article class="guide guide--windows" id="install-windows" aria-labelledby="guide-windows-title" data-reveal>
+          <div class="guide__head">
+            <span class="platform-icon"><svg aria-hidden="true"><use href="#i-windows"/></svg></span>
+            <h3 id="guide-windows-title">Windows desktop app installation guide</h3>
+          </div>
+          <p class="guide__intro">For Windows 10 or 11 (64-bit). The desktop app is installed for your Windows user only and needs no administrator rights.</p>
+          <ol class="steps">
+            <li><span class="step-num" aria-hidden="true">1</span><div><b>Open this website on the Windows laptop or PC.</b></div></li>
+            <li><span class="step-num" aria-hidden="true">2</span><div><b>Click <span class="ui-label">Download Windows App</span>.</b></div></li>
+            <li><span class="step-num" aria-hidden="true">3</span><div><b>Wait for the installer to download.</b><p>The file is <span class="mono">SeedManagement-Setup-0.1.1.exe</span> (about 111 MB).</p></div></li>
+            <li><span class="step-num" aria-hidden="true">4</span><div><b>Open the installer.</b><p>The installer is not code-signed, so Windows may show “Windows protected your PC”. If you downloaded it from this website, click <span class="ui-label">More info</span>, then <span class="ui-label">Run anyway</span>. You can compare the file with the SHA-256 shown in the Downloads section.</p></div></li>
+            <li><span class="step-num" aria-hidden="true">5</span><div><b>Follow the installation wizard.</b><p>You can keep the default installation folder. A desktop shortcut and a Start menu entry are created.</p></div></li>
+            <li><span class="step-num" aria-hidden="true">6</span><div><b>Launch <span class="ui-label">Seed Management</span>.</b></div></li>
+            <li><span class="step-num" aria-hidden="true">7</span><div><b>Sign in with an admin account.</b><p>Use an account created by a Superadmin in the WeighingQR admin dashboard. Accounts created in the Android app cannot sign in to the desktop app.</p></div></li>
+            <li><span class="step-num" aria-hidden="true">8</span><div><b>Confirm the connection.</b><p>The sign-in screen shows the server address and the app version. After sign-in, the sync status shows that records were downloaded; <span class="ui-label">Sync now</span> refreshes them.</p></div></li>
+            <li><span class="step-num" aria-hidden="true">9</span><div><b>Work with the records.</b><p>All admin accounts can view records, including Before Weight and After Weight from mobile weighings. Superadmin accounts can also add and edit records. The app keeps <span class="mono">Seed_Management.xlsx</span> in your Documents folder; use <span class="ui-label">Show in folder</span> or <span class="ui-label">Save a copy</span> to open it.</p></div></li>
+            <li><span class="step-num" aria-hidden="true">10</span><div><b>Check that saved records match.</b><p>A packet weighed on the phone should show the same values in the desktop app and in the admin dashboard after the next sync.</p></div></li>
+          </ol>
+          <div class="notes">
+            <div class="callout"><svg aria-hidden="true"><use href="#i-info"/></svg><p>The desktop app does not weigh or scan packets. Weighing happens in the Android app; the desktop app manages the resulting records.</p></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ── FAQ ──────────────────────────────────────────────────────────── -->
+    <section class="section section--white" id="faq" aria-labelledby="faq-title">
+      <div class="container">
+        <div class="section-head section-head--center" data-reveal>
+          <span class="eyebrow">FAQ</span>
+          <h2 id="faq-title">Frequently asked questions</h2>
+        </div>
+        <div class="faq" data-reveal>
+          <details>
+            <summary>Is the Android APK different from the Windows application?</summary>
+            <div class="answer">
+              <p>Yes. They are two separate apps with separate installers. The Android app (<span class="mono">.apk</span>) scans packet QR codes and records before and after weights. The Windows app, “Seed Management” (<span class="mono">.exe</span>), is a desktop records manager for admin accounts. Neither file can be used on the other platform.</p>
+            </div>
+          </details>
+          <details>
+            <summary>Do I need to be on the same Wi-Fi network?</summary>
+            <div class="answer">
+              <p>No. Both apps connect to the WeighingQR server over the internet, so any working connection is enough: mobile data or any Wi-Fi.</p>
+            </div>
+          </details>
+          <details>
+            <summary>How do I install the APK?</summary>
+            <div class="answer">
+              <p>Download it on the phone, open the file, allow installation from your browser or file manager if Android asks, then tap Install. See the <a href="#install-android">Android installation guide</a> for every step.</p>
+            </div>
+          </details>
+          <details>
+            <summary>How do I install the Windows application?</summary>
+            <div class="answer">
+              <p>Download <span class="mono">SeedManagement-Setup-0.1.1.exe</span>, open it (choose More info → Run anyway if SmartScreen warns you) and follow the wizard. See the <a href="#install-windows">Windows installation guide</a>.</p>
+            </div>
+          </details>
+          <details>
+            <summary>How do I create an account and sign in?</summary>
+            <div class="answer">
+              <p><strong>Android:</strong> on the Sign In screen tap Create Account, enter your full name, email address and password (twice), then sign in with that email and password.</p>
+              <p><strong>Windows:</strong> the desktop app has no self sign-up. It needs an admin account created by a Superadmin in the admin dashboard. Accounts created in the Android app do not work there.</p>
+            </div>
+          </details>
+          <details>
+            <summary>Where can I view saved measurement records?</summary>
+            <div class="answer">
+              <p>On the phone, in the History and Analytics tabs; Product Info shows one packet's values after you scan it. Admin accounts can also see records in the admin dashboard and in the Windows desktop app.</p>
+            </div>
+          </details>
+          <details>
+            <summary>What should I do if the server is offline?</summary>
+            <div class="answer">
+              <p>Check that the phone or PC has internet access, then wait a moment and try again. After a period without use, the server can take up to about a minute to respond to the first request. On the phone, use Retry on the Dashboard, or check the connection status in Settings.</p>
+              <p>A measurement only counts as saved when the app confirms it. If the connection drops during a weighing, scan the same packet again later: the app resumes the unfinished weighing from what the server already has.</p>
+            </div>
+          </details>
+          <details>
+            <summary>Why does Android warn about installing an APK?</summary>
+            <div class="answer">
+              <p>Android warns about every app installed from outside the Play Store, which is how this app is distributed. Install it only from this website. You can confirm the file is genuine by comparing its SHA-256 checksum with the one shown in the Downloads section.</p>
+            </div>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Closing call to action ───────────────────────────────────────── -->
+    <section class="section" aria-labelledby="cta-title">
+      <div class="container">
+        <div class="cta-band" data-reveal>
+          <div>
+            <h2 id="cta-title">Ready to start weighing?</h2>
+            <p>Install the Android app on the phones used for weighing, and the Windows app on the PCs that manage records.</p>
+          </div>
+          <div class="cta-band__actions">
+            <a class="btn btn--primary btn--lg" href="#download-android" data-download-link="android"><svg aria-hidden="true"><use href="#i-android"/></svg> Android App</a>
+            <a class="btn btn--outline btn--lg" href="#download-windows" data-download-link="windows"><svg aria-hidden="true"><use href="#i-windows"/></svg> Windows App</a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div>
+          <a class="brand" href="#home"><img src="assets/weighingqr-icon.png" alt="" width="38" height="38"><span>Weighing<b>QR</b></span></a>
+          <p class="footer-about">Seed packet weighing and QR tracking: identify packets by QR code, capture before and after weights and keep measurement records.</p>
+        </div>
+        <nav aria-labelledby="footer-nav-title">
+          <h2 id="footer-nav-title">Navigate</h2>
+          <ul class="footer-links">
+            <li><a href="#home">Home</a></li>
+            <li><a href="#features">Features</a></li>
+            <li><a href="#downloads">Downloads</a></li>
+            <li><a href="#install">Installation Guide</a></li>
+            <li><a href="#faq">FAQ</a></li>
+          </ul>
+        </nav>
+        <div>
+          <h2>Download</h2>
+          <ul class="footer-links">
+            <li><a href="#download-android" data-download-link="android">Android app (.apk)</a></li>
+            <li><a href="#download-windows" data-download-link="windows">Windows app (.exe)</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>© <span data-year>2026</span> WeighingQR. All rights reserved.</span>
+        <span>Seed Packet Weighing &amp; QR Tracking System</span>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

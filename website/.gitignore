@@ -1,0 +1,7 @@
+# Build output
+dist/
+
+# Installers are hosted elsewhere — never commit them with the website.
+*.apk
+*.exe
+*.aab

@@ -1,0 +1,62 @@
+/* Design tokens. Navy, green and the neutral background are the mobile app's
+   own colours (weighingqrauto/src/ui/theme.js); everything else builds on them. */
+:root {
+  /* brand */
+  --navy-900: #0d1350;
+  --navy-800: #141b66;
+  --navy-700: #1a227f;          /* app primary */
+  --navy-600: #2a33a0;
+  --navy-100: #e6e8fa;
+  --navy-50:  #f2f3fd;
+
+  --lavender-200: #dcd8fb;
+  --lavender-100: #ecebfe;
+  --lavender-50:  #f6f5ff;
+
+  --green-700: #087a50;         /* text/buttons on white: AA contrast */
+  --green-600: #0a8c5c;
+  --green-500: #0ea76a;         /* app success */
+  --green-100: #dcf5ea;
+  --green-50:  #effaf5;
+
+  --amber-700: #8a5a00;
+  --amber-50:  #fff7e6;
+  --red-700:   #b42318;
+  --red-50:    #fef3f2;
+
+  /* neutrals */
+  --ink-900: #0f172a;           /* app text */
+  --ink-700: #334155;
+  --ink-600: #475569;
+  --ink-500: #64748b;
+  --line:    #e2e6ef;
+  --surface: #ffffff;
+  --page:    #f6f6f8;           /* app background */
+
+  /* type */
+  --font-sans: "Inter", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  --text-xs: 0.8125rem;
+  --text-sm: 0.9375rem;
+  --text-md: 1.0625rem;
+  --text-lg: 1.25rem;
+  --text-xl: clamp(1.5rem, 1.2rem + 1.2vw, 2.125rem);
+  --text-2xl: clamp(2.125rem, 1.4rem + 3.2vw, 3.75rem);
+
+  /* shape & depth */
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --radius-pill: 999px;
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.05);
+  --shadow-md: 0 6px 16px -4px rgba(26, 34, 127, 0.12), 0 2px 6px -2px rgba(15, 23, 42, 0.06);
+  --shadow-lg: 0 24px 48px -16px rgba(26, 34, 127, 0.28), 0 8px 18px -8px rgba(15, 23, 42, 0.12);
+
+  /* layout */
+  --container: 1160px;
+  --gutter: clamp(16px, 4vw, 32px);
+  --section-y: clamp(64px, 8vw, 112px);
+  --header-h: 68px;
+
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}

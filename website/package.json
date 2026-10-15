@@ -1,0 +1,16 @@
+{
+  "name": "weighingqr-website",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WeighingQR product and download website — static, no runtime dependencies.",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "node scripts/serve.mjs",
+    "check": "node scripts/check.mjs",
+    "build": "node scripts/build.mjs",
+    "preview": "node scripts/serve.mjs --dir dist"
+  }
+}
