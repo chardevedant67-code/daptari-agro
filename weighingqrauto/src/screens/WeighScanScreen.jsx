@@ -34,6 +34,9 @@ import {
   linkSessionToPacket,
 } from '../services/api';
 import {addNotification} from '../store/slices/notificationSlice';
+import {weightFieldValue, shownWeight, MESSAGES, WEIGHT_OCR_DEBUG} from '../services/weightOcr';
+import DisplayCropModal from '../ui/components/DisplayCropModal';
+import {readWeightWithAI} from '../services/aiWeightRead';
 
 function extractProductId(raw) {
   if (!raw) return null;
@@ -76,6 +79,15 @@ export default function WeighScanScreen() {
   // itself skipped whenever the corresponding URL below is already set.
   const [resumedBeforePhotoUrl, setResumedBeforePhotoUrl] = useState(null);
   const [resumedAfterPhotoUrl, setResumedAfterPhotoUrl]   = useState(null);
+  // Scale-display OCR. null = idle; otherwise {phase: 'before'|'after',
+  // status: 'reading'|'framing'|'result'|'error', result?, message?,
+  // photo?: {uri, asset, source} the picture being read, crop?: the area of
+  // it that was read}. A detected value only ever reaches
+  // beforeWeightVal/afterWeightVal when the user taps "Confirm" — it is
+  // never submitted automatically.
+  const [ocr, setOcr] = useState(null);
+  const beforeInputRef = useRef(null);
+  const afterInputRef = useRef(null);
 
   const scannedRef = useRef(false);
   // Guards the actual session-creation request specifically — a rapid
@@ -103,7 +115,10 @@ export default function WeighScanScreen() {
 
   // Reset scan lock when returning to step 1
   useEffect(() => {
-    if (step === 1) scannedRef.current = false;
+    if (step === 1) {
+      scannedRef.current = false;
+    }
+    setOcr(null);
   }, [step]);
 
   // A filled packet's permanent QR is still perfectly valid to scan — it
@@ -245,6 +260,225 @@ export default function WeighScanScreen() {
     } catch (_) {
       setError('Could not open gallery');
     }
+  };
+
+  // Shows what was read from a photo (or why nothing was) for the user to
+  // act on. `crop` is the area of the photo that was read.
+  const showParsed = (phase, parsed, photo, crop) => {
+    // TEMPORARY on-screen debug (what each pass saw) so a failure can be
+    // diagnosed on the phone without logcat. Goes away with WEIGHT_OCR_DEBUG.
+    const debug = WEIGHT_OCR_DEBUG && !parsed.ok
+      ? `[debug] ${parsed.reason}\n${(parsed.passSummary || []).join('\n')}`
+      : null;
+    setOcr(parsed.ok
+      ? {phase, status: 'result', result: parsed, source: photo.source, photo, crop, cropUri: parsed.cropUri}
+      : {phase, status: 'error', message: parsed.message, hint: parsed.hint, choices: parsed.choices,
+        debug, source: photo.source, photo, crop, cropUri: parsed.cropUri});
+  };
+
+  // Opens the manual framing of a photo, starting from `crop` when there is one.
+  const frameByHand = (phase, photo, crop, notice) => {
+    setOcr({phase, status: 'framing', uri: photo.uri, asset: photo.asset, source: photo.source, photo,
+      initialCrop: crop || null, notice: notice || null});
+  };
+
+  // Scale-display reading: photograph the display; the backend's vision model
+  // reads it and the phone's own reader cross-checks the same photo
+  // (aiWeightRead.js). The reading and the picture of the display are shown
+  // for confirmation; Adjust Crop lets the user frame the display and read
+  // again. Nothing is saved or submitted here.
+  const handleScanDisplay = async (phase) => {
+    const source = 'camera';
+    setError('');
+    setOcr(null);
+    try {
+      // Long side capped at 2048 px: plenty for the digits, and a small upload.
+      const size = {maxWidth: 2048, maxHeight: 2048, quality: 0.9};
+      const result = await launchCamera({mediaType: 'photo', saveToPhotos: false, ...size});
+      if (WEIGHT_OCR_DEBUG) {
+        console.log('[WeightOCR] camera result:', JSON.stringify({
+          didCancel: result.didCancel, errorCode: result.errorCode, errorMessage: result.errorMessage,
+          assets: result.assets?.length,
+        }));
+      }
+      if (result.didCancel) return;
+      if (!result.assets?.length) {
+        setOcr({phase, status: 'error', message: MESSAGES.camera,
+          debug: WEIGHT_OCR_DEBUG ? `[debug] camera: ${result.errorCode || 'no asset'}` : null});
+        return;
+      }
+      const photo = {uri: result.assets[0].uri, asset: result.assets[0], source};
+      setOcr({phase, status: 'reading', photo, source});
+      const r = await readWeightWithAI(photo.uri, token);
+      showParsed(phase, r, photo, r.crop);
+    } catch (e) {
+      setOcr({phase, status: 'error', message: MESSAGES.camera, source,
+        debug: WEIGHT_OCR_DEBUG ? `[debug] camera: ${e && e.message}` : null});
+    }
+  };
+
+  const handleCropConfirm = async (crop) => {
+    const {phase, uri, asset} = ocr;
+    const photo = ocr.photo || {uri, asset, source: ocr.source};
+    setOcr({phase, status: 'reading', photo, source: photo.source});
+    try {
+      const parsed = await readWeightWithAI(uri, token, crop);
+      showParsed(phase, parsed, photo, crop);
+    } catch (e) {
+      console.log('[WeightOCR] unexpected error:', e && e.message);
+      setOcr({phase, status: 'error', message: MESSAGES.unreadable, photo, source: photo.source, crop,
+        debug: WEIGHT_OCR_DEBUG ? `[debug] unexpected: ${e && e.message}` : null});
+    }
+  };
+
+  // Retake: a new photo with the camera.
+  const handleRetake = (phase) => {
+    handleScanDisplay(phase);
+  };
+
+  // `edit`: also put the cursor in the weight field, for a reading that is
+  // nearly right and quicker to correct than to retake.
+  const handleUseDetectedWeight = (edit = false) => {
+    if (ocr?.status !== 'result') return;
+    const {phase} = ocr;
+    const value = weightFieldValue(ocr.result);
+    if (phase === 'before') setBeforeWeightVal(value);
+    else setAfterWeightVal(value);
+    setOcr(null);
+    if (edit) handleEditWeight(phase);
+  };
+
+  // The two readers disagreed; the user looked at the display and picked one.
+  const handleUseChoice = (phase, choice) => {
+    const value = weightFieldValue(choice);
+    if (phase === 'before') setBeforeWeightVal(value);
+    else setAfterWeightVal(value);
+    setOcr(null);
+  };
+
+  // Recognition failed and the user would rather type the weight.
+  const handleTypeInstead = (phase) => {
+    setOcr(null);
+    handleEditWeight(phase);
+  };
+
+  const handleEditWeight = (phase) => {
+    const input = phase === 'before' ? beforeInputRef.current : afterInputRef.current;
+    if (input) input.focus();
+  };
+
+  // Shared by the before/after weight steps. Rendered only for the step it
+  // belongs to, so a stale result from the other step never shows.
+  const renderScanDisplay = (phase) => {
+    const cur = ocr && ocr.phase === phase ? ocr : null;
+    return (
+      <>
+        <DisplayCropModal
+          visible={cur?.status === 'framing'}
+          uri={cur?.uri}
+          initialCrop={cur?.initialCrop}
+          notice={cur?.notice}
+          onConfirm={handleCropConfirm}
+          onCancel={() => setOcr(null)}
+        />
+        <Text style={styles.scanHintTxt}>
+          Use the REAR camera. Tap the display to focus, hold steady, straight-on, no glare, with the whole display in the photo. Bright LED digits can wash out — lower the exposure if they look white. The display is found automatically; you frame it yourself only if it cannot be.
+        </Text>
+        <Pressable
+          style={[styles.scanDisplayBtn, (saving || cur?.status === 'reading') && styles.nextBtnDisabled]}
+          disabled={saving || cur?.status === 'reading'}
+          onPress={() => handleScanDisplay(phase)}>
+          {cur?.status === 'reading'
+            ? <ActivityIndicator color={COLORS.primary} />
+            : <>
+                <Icon name="photo-camera" size={18} color={COLORS.primary} />
+                <Text style={styles.scanDisplayTxt}>📷 Scan Scale Display</Text>
+              </>}
+        </Pressable>
+
+        {cur?.status === 'result' && (
+          <View style={styles.ocrCard}>
+            {!!cur.cropUri && (
+              <>
+                <Text style={styles.ocrLbl}>Display found in the photo</Text>
+                <Image source={{uri: cur.cropUri}} style={styles.ocrCrop} resizeMode="contain" />
+                <Text style={styles.ocrNote}>Check that every digit and the decimal point are in this picture.</Text>
+              </>
+            )}
+            <Text style={styles.ocrLbl}>Detected Weight</Text>
+            <Text style={styles.ocrVal}>{cur.result.detectedValue} {cur.result.detectedUnit}</Text>
+            {cur.result.converted && (
+              <Text style={styles.ocrNote}>
+                = {cur.result.kg} kg
+              </Text>
+            )}
+            {cur.result.unitAssumed && (
+              <Text style={styles.ocrNote}>
+                No unit visible on the display — assuming kg
+              </Text>
+            )}
+            {!!cur.result.note && (
+              <Text style={styles.ocrNote}>{cur.result.note}</Text>
+            )}
+            {cur.result.otherReadings?.length > 0 && (
+              <Text style={styles.ocrNote}>
+                A second reader saw {cur.result.otherReadings.join(', ')} kg instead — check the display before using this.
+              </Text>
+            )}
+            <View style={styles.ocrBtnRow}>
+              <Pressable style={[styles.ocrBtn, styles.ocrBtnPrimary]} onPress={() => handleUseDetectedWeight(false)}>
+                <Text style={styles.ocrBtnPrimaryTxt}>Confirm Weight</Text>
+              </Pressable>
+              <Pressable style={styles.ocrBtn} onPress={() => handleRetake(phase)}>
+                <Text style={styles.ocrBtnTxt}>Retake Photo</Text>
+              </Pressable>
+            </View>
+            <View style={[styles.ocrBtnRow, styles.ocrBtnRow2]}>
+              {!!cur.photo && (
+                <Pressable style={styles.ocrBtn} onPress={() => frameByHand(phase, cur.photo, cur.crop)}>
+                  <Text style={styles.ocrBtnTxt}>Adjust Crop</Text>
+                </Pressable>
+              )}
+              <Pressable style={styles.ocrBtn} onPress={() => handleTypeInstead(phase)}>
+                <Text style={styles.ocrBtnTxt}>Enter Manually</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+
+        {cur?.status === 'error' && (
+          <View style={styles.ocrCard}>
+            {!!cur.cropUri && <Image source={{uri: cur.cropUri}} style={styles.ocrCrop} resizeMode="contain" />}
+            <Text style={styles.errTxt}>{cur.message}</Text>
+            {!!cur.hint && <Text style={styles.ocrNote}>{cur.hint}</Text>}
+            {(cur.choices || []).map(choice => (
+              <Pressable
+                key={`${choice.engine}-${choice.kg}`}
+                style={[styles.ocrBtn, styles.ocrChoiceBtn]}
+                onPress={() => handleUseChoice(phase, choice)}>
+                <Text style={styles.ocrBtnTxt}>
+                  Use {choice.detectedValue} {choice.detectedUnit}{choice.converted ? ` (= ${choice.kg} kg)` : ''}{choice.unconfirmed ? ' (server only, unconfirmed)' : ''}
+                </Text>
+              </Pressable>
+            ))}
+            {!!cur.debug && <Text style={styles.ocrDebug}>{cur.debug}</Text>}
+            <View style={styles.ocrBtnRow}>
+              <Pressable style={[styles.ocrBtn, styles.ocrBtnPrimary]} onPress={() => handleRetake(phase)}>
+                <Text style={styles.ocrBtnPrimaryTxt}>Retake Photo</Text>
+              </Pressable>
+              {!!cur.photo && (
+                <Pressable style={styles.ocrBtn} onPress={() => frameByHand(phase, cur.photo, cur.crop)}>
+                  <Text style={styles.ocrBtnTxt}>Adjust Crop</Text>
+                </Pressable>
+              )}
+              <Pressable style={styles.ocrBtn} onPress={() => handleTypeInstead(phase)}>
+                <Text style={styles.ocrBtnTxt}>Enter Manually</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+      </>
+    );
   };
 
   // Step 2 → 3: create the session (first time only) and save the before
@@ -466,7 +700,7 @@ export default function WeighScanScreen() {
           </View>
 
           <Text style={styles.stepTitle}>Step 2 — Before Weight</Text>
-          <Text style={styles.stepSub}>Weigh the packet before filling and enter it manually</Text>
+          <Text style={styles.stepSub}>Weigh the packet before filling, then scan the display or type the weight</Text>
 
           <View style={styles.inputCard}>
             <Text style={styles.inputLbl}>Before Weight (kg)</Text>
@@ -475,11 +709,14 @@ export default function WeighScanScreen() {
               placeholder="e.g. 0.50"
               placeholderTextColor={COLORS.muted}
               keyboardType="numeric"
+              ref={beforeInputRef}
               value={beforeWeightVal}
               onChangeText={setBeforeWeightVal}
               autoFocus
             />
           </View>
+
+          {renderScanDisplay('before')}
 
           {!!error && <Text style={styles.errTxt}>{error}</Text>}
 
@@ -518,7 +755,7 @@ export default function WeighScanScreen() {
             </View>
             <View style={{flex: 1}}>
               <Text style={styles.productName}>{packet?.batchId?.seedType || 'Seed Packet'}</Text>
-              <Text style={styles.productMeta}>Before: {parseFloat(beforeWeightVal || 0).toFixed(2)} kg</Text>
+              <Text style={styles.productMeta}>Before: {shownWeight(beforeWeightVal)} kg</Text>
             </View>
           </View>
 
@@ -598,7 +835,7 @@ export default function WeighScanScreen() {
             </View>
             <View style={{flex: 1}}>
               <Text style={styles.productName}>{packet?.batchId?.seedType || 'Seed Packet'}</Text>
-              <Text style={styles.productMeta}>ID: {packet?.uniqueId} · Before: {(b || 0).toFixed(2)} kg</Text>
+              <Text style={styles.productMeta}>ID: {packet?.uniqueId} · Before: {shownWeight(beforeWeightVal)} kg</Text>
             </View>
             {(beforePhotoUri || resumedBeforePhotoUrl) && (
               <Image source={{uri: beforePhotoUri || resolvePhotoUri(resumedBeforePhotoUrl)}} style={styles.thumbSmall} resizeMode="cover" />
@@ -606,7 +843,7 @@ export default function WeighScanScreen() {
           </View>
 
           <Text style={styles.stepTitle}>Step 4 — After Weight</Text>
-          <Text style={styles.stepSub}>Weigh the filled packet and enter it manually</Text>
+          <Text style={styles.stepSub}>Weigh the filled packet, then scan the display or type the weight</Text>
 
           <View style={styles.inputCard}>
             <Text style={styles.inputLbl}>After Weight (kg)</Text>
@@ -615,11 +852,14 @@ export default function WeighScanScreen() {
               placeholder="e.g. 5.24"
               placeholderTextColor={COLORS.muted}
               keyboardType="numeric"
+              ref={afterInputRef}
               value={afterWeightVal}
               onChangeText={setAfterWeightVal}
               autoFocus
             />
           </View>
+
+          {renderScanDisplay('after')}
 
           {diffPreview !== null && (
             <View style={styles.autoWeightCard}>
@@ -667,7 +907,7 @@ export default function WeighScanScreen() {
             </View>
             <View style={{flex: 1}}>
               <Text style={styles.productName}>{packet?.batchId?.seedType || 'Seed Packet'}</Text>
-              <Text style={styles.productMeta}>After: {parseFloat(afterWeightVal || 0).toFixed(2)} kg</Text>
+              <Text style={styles.productMeta}>After: {shownWeight(afterWeightVal)} kg</Text>
             </View>
           </View>
 
@@ -753,8 +993,8 @@ export default function WeighScanScreen() {
         <View style={styles.doneCard}>
           <DoneRow label="Packet ID" value={linkedPacket?.uniqueId || packet?.uniqueId} mono />
           <DoneRow label="Batch"     value={packet?.batchId?.batchNumber} mono />
-          <DoneRow label="Before"    value={`${parseFloat(beforeWeightVal || 0).toFixed(2)} kg`} />
-          <DoneRow label="After"     value={`${parseFloat(afterWeightVal || 0).toFixed(2)} kg`} />
+          <DoneRow label="Before"    value={`${shownWeight(beforeWeightVal)} kg`} />
+          <DoneRow label="After"     value={`${shownWeight(afterWeightVal)} kg`} />
           <DoneRow label="Difference" value={`${finalDiff >= 0 ? '+' : ''}${finalDiff.toFixed(2)} kg`} bold color={COLORS.primary} />
           <DoneRow label="Before Photo" value={doneBeforePhotoUri ? 'Saved & linked ✓' : 'Skipped'} />
           <DoneRow label="After Photo"  value={doneAfterPhotoUri ? 'Saved & linked ✓' : 'Skipped'} />
@@ -834,6 +1074,23 @@ const styles = StyleSheet.create({
   inputCard:       {backgroundColor: COLORS.white, borderRadius: RADIUS.md, padding: SPACING.md, borderWidth: 1, borderColor: COLORS.border},
   inputLbl:        {fontSize: 12, color: COLORS.muted, fontWeight: '600', marginBottom: 6},
   weightInput:     {borderWidth: 1, borderColor: COLORS.border, borderRadius: RADIUS.sm, paddingHorizontal: SPACING.sm, paddingVertical: 10, fontSize: 22, fontWeight: '700', color: COLORS.text, textAlign: 'center'},
+
+  scanDisplayBtn:  {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderWidth: 1.5, borderColor: COLORS.primary, borderRadius: RADIUS.md, height: 48, backgroundColor: COLORS.white},
+  scanDisplayTxt:  {fontSize: 14, fontWeight: '700', color: COLORS.primary},
+  ocrChoiceBtn:    {flex: 0, alignSelf: 'stretch', marginTop: SPACING.xs},
+  ocrCard:         {backgroundColor: COLORS.white, borderRadius: RADIUS.md, padding: SPACING.md, borderWidth: 1, borderColor: COLORS.border, alignItems: 'center', gap: 6},
+  ocrLbl:          {fontSize: 12, color: COLORS.muted, fontWeight: '600'},
+  ocrVal:          {fontSize: 32, fontWeight: '800', color: COLORS.text},
+  ocrNote:         {fontSize: 12, color: COLORS.muted, textAlign: 'center'},
+  ocrCrop:         {alignSelf: 'stretch', height: 110, backgroundColor: '#000', borderRadius: RADIUS.sm},
+  ocrBtnRow2:      {marginTop: 0},
+  ocrDebug:        {fontSize: 10, color: COLORS.muted, textAlign: 'left', alignSelf: 'stretch'},
+  scanHintTxt:     {fontSize: 12, color: COLORS.muted, textAlign: 'center'},
+  ocrBtnRow:       {flexDirection: 'row', gap: SPACING.sm, marginTop: SPACING.sm, alignSelf: 'stretch'},
+  ocrBtn:          {flex: 1, height: 44, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, alignItems: 'center', justifyContent: 'center'},
+  ocrBtnTxt:       {fontSize: 14, fontWeight: '700', color: COLORS.text},
+  ocrBtnPrimary:   {backgroundColor: COLORS.primary, borderColor: COLORS.primary},
+  ocrBtnPrimaryTxt:{fontSize: 14, fontWeight: '700', color: '#fff'},
 
   nextBtn:         {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: COLORS.primary, borderRadius: RADIUS.md, height: 52, ...SHADOWS.primary},
   nextBtnDisabled: {opacity: 0.4},

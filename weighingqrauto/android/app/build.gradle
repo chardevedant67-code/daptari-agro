@@ -157,6 +157,13 @@ dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
 
+    // PaddleOCR on-device OCR (official ppocr-android SDK, ONNX Runtime)
+    implementation project(':ppocr-sdk')
+
+    // Live scale-display reading takes its frames from the camera preview
+    // (PreviewView) that react-native-camera-kit already ships - same version.
+    implementation "androidx.camera:camera-view:1.4.2"
+
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")
     } else {

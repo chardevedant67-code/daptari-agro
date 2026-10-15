@@ -154,6 +154,59 @@ export const uploadSessionPhoto = (token, sessionId, photoUri, {uniqueId, phase}
     return data; // { success, photoUrl, beforePhotoUrl, afterPhotoUrl }
   });
 
+// Weight reading by the backend's vision model (POST /api/weight-read). The
+// photo goes to OUR backend only; the backend holds the model API key. The
+// answer is {status: 'ok' | 'unclear', value, unit, display_text, reason} -
+// a suggestion for the user to confirm, nothing is saved. Generous timeout:
+// a sleeping backend takes a while to wake, and the model a few seconds.
+const WEIGHT_READ_TIMEOUT_MS = 60000;
+
+export const readWeightByAI = (token, photoUri) =>
+  withNetworkErrors('POST /api/weight-read', async () => {
+    const filename = photoUri.split('/').pop() || 'display.jpg';
+    const ext      = filename.split('.').pop()?.toLowerCase() || 'jpg';
+    const mime     = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+    const fd = new FormData();
+    fd.append('photo', {uri: photoUri, name: filename, type: mime});
+
+    const url = await apiUrl('/api/weight-read');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), WEIGHT_READ_TIMEOUT_MS);
+    let res;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: {Authorization: `Bearer ${token}`},
+        body: fd,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (err && err.name === 'AbortError') {
+        const e = new Error('Reading the weight took too long. Check the connection and try again.');
+        e.code = 'CLIENT_TIMEOUT';
+        throw e;
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+    let data;
+    try {
+      data = await res.json();
+    } catch (e) {
+      const err = new Error('The server could not read the weight right now. Please try again.');
+      err.status = res.status;
+      throw err;
+    }
+    if (!data.success) {
+      const err = new Error(data.message || 'The weight could not be read.');
+      err.status = res.status;
+      if (data.code) err.code = data.code;
+      throw err;
+    }
+    return data;
+  });
+
 export const saveBeforeWeight = (token, sessionId, weight) =>
   withNetworkErrors(`POST /api/sessions/${sessionId}/before-weight`, async () => {
     const url = await apiUrl(`/api/sessions/${sessionId}/before-weight`);
