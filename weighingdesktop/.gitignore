@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+
+# Windows installer output (electron-builder)
+release/
+
+# Local test database (mongodb-memory-server) — binaries and data
+.cache/
+.testdb/
+
+# Test run output (screenshots, temporary workbooks, app data)
+.test-output/

@@ -30,7 +30,7 @@ const DATA_FIELDS = [
   { header: 'Rack_shelf',            field: 'rackShelf',            type: 'text' },
   { header: 'Location code',         field: 'locationCode',         type: 'text' },
   { header: 'Gene',                  field: 'gene',                 type: 'text' },
-  { header: 'Weight',                field: 'weight',               type: 'number' },
+  { header: 'Before Weight',         field: 'weight',               type: 'number' },
   { header: 'After Weight',          field: 'afterWeight',          type: 'number' },
   { header: 'Comments',              field: 'comments',             type: 'text' },
   { header: 'Final report',          field: 'finalReport',          type: 'text' },
@@ -48,7 +48,7 @@ const PACKET_DERIVED_FIELDS = ['crop', 'year', 'warehouse', 'rackShelf'];
 // afterwards, and an edit is never overwritten (records are only ever
 // inserted from batch data, never updated from it). Only a value actually
 // entered on the form is copied: nothing is derived from the seed name,
-// seed code or batch name. Weight and After Weight are not batch details —
+// seed code or batch name. Before Weight and After Weight are not batch details —
 // see PACKET_WEIGHT_FIELDS below.
 const BATCH_DETAIL_FIELDS = [
   'previousYear', 'yearCode', 'previousYearCode', 'farmLocationCode',
@@ -58,8 +58,8 @@ const BATCH_DETAIL_FIELDS = [
 ];
 
 // Columns filled from the weights the mobile app saved on the packet
-// (desktop field -> SeedPacket field): Weight is the packet's before-fill
-// weight, After Weight its after-fill weight. Copied only into a column that
+// (desktop field -> SeedPacket field): Before Weight (stored as `weight`) is
+// the packet's before-fill weight, After Weight its after-fill weight. Copied only into a column that
 // is still blank — a value already there, whoever entered it, is never
 // overwritten — and stay editable by a Superadmin.
 const PACKET_WEIGHT_FIELDS = {

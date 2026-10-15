@@ -1,0 +1,52 @@
+{
+  "name": "weighingdesktop",
+  "version": "0.1.1",
+  "private": true,
+  "description": "Seed Management desktop app — Login/Sign Up and the Excel Data Manager",
+  "main": "electron/main.js",
+  "scripts": {
+    "build:ui": "vite build",
+    "start": "vite build && electron .",
+    "test-mode": "vite build && node scripts/test-mode.js",
+    "test-mode:stop": "node scripts/test-mode.js stop",
+    "dist:win": "vite build && electron-builder --win nsis --x64",
+    "test": "node --test \"tests/unit/*.test.js\"",
+    "test:e2e": "node --test --test-concurrency=1 \"tests/e2e/*.test.js\"",
+    "test:ui": "vite build && node --test --test-concurrency=1 \"tests/ui/*.test.js\""
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0"
+  },
+  "devDependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/material": "^7.3.11",
+    "@mui/x-data-grid": "^8.29.3",
+    "@vitejs/plugin-react": "^6.1.2",
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3",
+    "mongodb-memory-server": "^11.3.0",
+    "playwright-core": "^1.64.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "vite": "^8.3.4"
+  },
+  "build": {
+    "appId": "com.daptariagro.seedmanagement",
+    "productName": "Seed Management",
+    "directories": { "output": "release", "buildResources": "installer" },
+    "files": ["dist/**/*", "electron/**/*", "shared/**/*", "production.config.json", "package.json"],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Seed Management"
+    }
+  }
+}

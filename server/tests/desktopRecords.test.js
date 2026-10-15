@@ -973,10 +973,10 @@ describe('desktop records — the 24-column contract', () => {
     'Crop', 'Previous Year', 'Year', 'Year_code', 'PreviousYear_code', 'FarmLocation_code',
     'Female_code', 'Male_code', 'Spt Score', 'Disease score', 'Yield 1', 'Yield 2', 'Total',
     'Name Of Variety', 'Varity_Code', 'PreviousLocation_code', 'Wearhouse', 'Rack_shelf',
-    'Location code', 'Gene', 'Weight', 'After Weight', 'Comments', 'Final report',
+    'Location code', 'Gene', 'Before Weight', 'After Weight', 'Comments', 'Final report',
   ];
 
-  it('exactly the 24 approved headers, in the approved order — After Weight right after Weight', () => {
+  it('exactly the 24 approved headers, in the approved order — After Weight right after Before Weight', () => {
     assert.deepEqual(DesktopSeedRecord.DATA_FIELDS.map((f) => f.header), EXPECTED_HEADERS);
     assert.equal(DesktopSeedRecord.DATA_FIELDS.length, 24);
   });
