@@ -5,7 +5,7 @@ const mongoose = require('mongoose');
 // the sole source of truth for batch/packet data and are never modified by
 // anything that touches this model.
 //
-// DATA_FIELDS is the single definition of the 23 Excel columns (exact header
+// DATA_FIELDS is the single definition of the 24 Excel columns (exact header
 // text, exact order) — the schema below, the route validation
 // (desktopRecordRoutes.js) and the desktop app's own column list all follow
 // this order. `type` is 'text' or 'number'.
@@ -31,6 +31,7 @@ const DATA_FIELDS = [
   { header: 'Location code',         field: 'locationCode',         type: 'text' },
   { header: 'Gene',                  field: 'gene',                 type: 'text' },
   { header: 'Weight',                field: 'weight',               type: 'number' },
+  { header: 'After Weight',          field: 'afterWeight',          type: 'number' },
   { header: 'Comments',              field: 'comments',             type: 'text' },
   { header: 'Final report',          field: 'finalReport',          type: 'text' },
 ];
@@ -47,14 +48,24 @@ const PACKET_DERIVED_FIELDS = ['crop', 'year', 'warehouse', 'rackShelf'];
 // afterwards, and an edit is never overwritten (records are only ever
 // inserted from batch data, never updated from it). Only a value actually
 // entered on the form is copied: nothing is derived from the seed name,
-// seed code or batch name. Weight is deliberately NOT here — how it maps to
-// a packet's weighing data is unconfirmed, so it is never pre-filled.
+// seed code or batch name. Weight and After Weight are not batch details —
+// see PACKET_WEIGHT_FIELDS below.
 const BATCH_DETAIL_FIELDS = [
   'previousYear', 'yearCode', 'previousYearCode', 'farmLocationCode',
   'femaleCode', 'maleCode', 'sptScore', 'diseaseScore', 'yield1', 'yield2',
   'total', 'varietyName', 'varietyCode', 'previousLocationCode',
   'locationCode', 'gene', 'comments', 'finalReport',
 ];
+
+// Columns filled from the weights the mobile app saved on the packet
+// (desktop field -> SeedPacket field): Weight is the packet's before-fill
+// weight, After Weight its after-fill weight. Copied only into a column that
+// is still blank — a value already there, whoever entered it, is never
+// overwritten — and stay editable by a Superadmin.
+const PACKET_WEIGHT_FIELDS = {
+  weight:      'beforeWeight',
+  afterWeight: 'afterWeight',
+};
 
 const dataPaths = {};
 for (const { field, type } of DATA_FIELDS) {
@@ -101,6 +112,7 @@ const DesktopSeedRecord = mongoose.model('DesktopSeedRecord', DesktopSeedRecordS
 DesktopSeedRecord.DATA_FIELDS = DATA_FIELDS;
 DesktopSeedRecord.PACKET_DERIVED_FIELDS = PACKET_DERIVED_FIELDS;
 DesktopSeedRecord.BATCH_DETAIL_FIELDS = BATCH_DETAIL_FIELDS;
+DesktopSeedRecord.PACKET_WEIGHT_FIELDS = PACKET_WEIGHT_FIELDS;
 DesktopSeedRecord.TEXT_MAX_LENGTH = TEXT_MAX_LENGTH;
 
 module.exports = DesktopSeedRecord;

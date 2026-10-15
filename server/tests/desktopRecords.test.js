@@ -1,6 +1,6 @@
 // Desktop records (desktopRecordRoutes.js / DesktopSeedRecord.js) —
 // authorization matrix, validation, idempotent create, version conflicts,
-// packet import and the 23-column contract. Same approach as the rest of
+// packet import and the 24-column contract. Same approach as the rest of
 // this suite: the real router/middleware run against mocked model methods,
 // no database connection.
 require('./setup');
@@ -61,19 +61,29 @@ function findChain(docs) {
 }
 const leanOne = (doc) => ({ lean: async () => doc });
 
-// In-memory stand-in for the two things the automatic packet step looks at:
-// the SeedPacket collection and which packets already have a desktop record.
+// In-memory stand-in for the things the automatic packet step looks at: the
+// SeedPacket collection, which packets already have a desktop record, and
+// what those records hold in Weight / After Weight (`recordWeights`, keyed
+// by packet uniqueId; a record not listed there has both blank).
 // `world.calls` logs every lookup so tests can see exactly what was read.
 let world;
-function usePackets(packets, linked = []) {
+const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+function usePackets(packets, linked = [], recordWeights = {}) {
   world = {
     packets: packets.map((p, i) => ({ _id: `p${String(i + 1).padStart(6, '0')}`, ...p })),
     linked: new Set(linked),
+    recordWeights: new Map(Object.entries(recordWeights)),
     calls: [],
   };
+  const weightsOf = (id) => ({ weight: null, afterWeight: null, ...(world.recordWeights.get(id) || {}) });
   SeedPacket.estimatedDocumentCount = async () => { world.calls.push('packetCount'); return world.packets.length; };
   SeedPacket.findOne = () => ({
-    sort: () => ({ select: () => ({ lean: async () => {
+    sort: (arg) => ({ select: () => ({ lean: async () => {
+      if (arg && arg.updatedAt) {
+        world.calls.push('latestPacketChange');
+        const times = world.packets.map((p) => p.updatedAt).filter(Boolean).map((t) => new Date(t).getTime());
+        return world.packets.length ? { updatedAt: times.length ? new Date(Math.max(...times)) : undefined } : null;
+      }
       world.calls.push('newestPacket');
       const last = world.packets[world.packets.length - 1];
       return last ? { _id: last._id } : null;
@@ -81,14 +91,22 @@ function usePackets(packets, linked = []) {
   });
   SeedPacket.find = (filter = {}) => {
     const after = filter._id ? filter._id.$gt : null;
-    const call = { kind: 'packetScan', filter, limit: null, select: null, populate: null, sort: null };
+    // The weight pass asks only for packets holding a weight (an $or on the
+    // weight fields), optionally changed since its previous run.
+    const weightScan = Boolean(filter.$or);
+    const since = filter.updatedAt ? new Date(filter.updatedAt.$gte).getTime() : null;
+    const call = { kind: weightScan ? 'weightScan' : 'packetScan', filter, limit: null, select: null, populate: null, sort: null };
     world.calls.push(call);
     const chain = {
       sort(arg) { call.sort = arg; return chain; },
       limit(arg) { call.limit = arg; return chain; },
       select(arg) { call.select = arg; return chain; },
       populate(...args) { call.populate = args; return chain; },
-      lean: async () => world.packets.filter((p) => !after || p._id > after).slice(0, call.limit || undefined),
+      lean: async () => world.packets
+        .filter((p) => !after || p._id > after)
+        .filter((p) => !weightScan || isNum(p.beforeWeight) || isNum(p.afterWeight))
+        .filter((p) => since === null || (p.updatedAt && new Date(p.updatedAt).getTime() >= since))
+        .slice(0, call.limit || undefined),
     };
     return chain;
   };
@@ -98,6 +116,14 @@ function usePackets(packets, linked = []) {
   DesktopSeedRecord.find = (filter = {}) => {
     if (filter.packetUniqueId && filter.packetUniqueId.$in) {
       const asked = filter.packetUniqueId.$in;
+      if (filter.$or) {
+        // The weight pass: linked records with a blank weight column.
+        world.calls.push({ kind: 'weightLookup', size: asked.length });
+        return { select: () => ({ lean: async () => asked
+          .filter((id) => world.linked.has(id))
+          .map((id) => ({ _id: `rec-${id}`, packetUniqueId: id, ...weightsOf(id) }))
+          .filter((r) => r.weight === null || r.afterWeight === null) }) };
+      }
       world.calls.push({ kind: 'linkedLookup', size: asked.length });
       return { select: () => ({ lean: async () => asked.filter((id) => world.linked.has(id)).map((id) => ({ packetUniqueId: id })) }) };
     }
@@ -105,12 +131,25 @@ function usePackets(packets, linked = []) {
   };
   DesktopSeedRecord.insertMany = async (docs) => {
     writes.push(['insertMany', docs]);
-    for (const doc of docs) world.linked.add(doc.packetUniqueId);
+    for (const doc of docs) {
+      world.linked.add(doc.packetUniqueId);
+      world.recordWeights.set(doc.packetUniqueId, { weight: doc.weight ?? null, afterWeight: doc.afterWeight ?? null });
+    }
     return docs;
+  };
+  DesktopSeedRecord.bulkWrite = async (ops, options) => {
+    writes.push(['bulkWrite', ops, options]);
+    for (const { updateOne: { filter, update } } of ops) {
+      const id = filter._id.replace(/^rec-/, '');
+      world.recordWeights.set(id, { ...weightsOf(id), ...update.$set });
+    }
+    return { modifiedCount: ops.length };
   };
   return world;
 }
 const scans = () => world.calls.filter((c) => c.kind === 'packetScan');
+const weightScans = () => world.calls.filter((c) => c.kind === 'weightScan');
+const bulkWrites = () => writes.filter(([kind]) => kind === 'bulkWrite');
 const inserted = () => writes.filter(([kind]) => kind === 'insertMany').flatMap(([, docs]) => docs);
 
 // Every model method a route could reach. Each test overrides what it needs;
@@ -127,6 +166,7 @@ beforeEach(() => {
   DesktopSeedRecord.create = async (doc) => { writes.push(['create', doc]); return { ...doc, createdAt: new Date(), updatedAt: new Date() }; };
   DesktopSeedRecord.insertMany = async (docs) => { writes.push(['insertMany', docs]); return docs; };
   DesktopSeedRecord.findOneAndUpdate = (filter, update) => { writes.push(['update', filter, update]); return leanOne(null); };
+  DesktopSeedRecord.bulkWrite = async (ops) => { writes.push(['bulkWrite', ops]); return { modifiedCount: ops.length }; };
   usePackets([]);
 });
 
@@ -391,7 +431,7 @@ const detailedBatch = {
 };
 
 const packetsFixture = [
-  { uniqueId: 'PRD-SOYB01-001', batchId: batch, difference: 1.25, afterWeight: 2.5, beforeWeight: 1.25, status: 'filled' },
+  { uniqueId: 'PRD-SOYB01-001', batchId: batch, difference: 2, afterWeight: 2.5, beforeWeight: 0.5, status: 'filled' },
   { uniqueId: 'PRD-SOYB01-002', batchId: batch, status: 'empty' },
   { uniqueId: 'PRD-ORPH01-001', batchId: null, status: 'empty' },
 ];
@@ -435,7 +475,8 @@ describe('desktop records — existing packets are made available automatically 
     assert.equal(doc.total, 99, 'Total is the entered value, not Yield 1 + Yield 2');
     assert.equal(doc.varietyName, 'DKC-9144');
     assert.equal(doc.varietyCode, 'V-9144');
-    assert.equal('weight' in doc, false, 'Weight is still never pre-filled');
+    assert.equal('weight' in doc, false, 'an unweighed packet leaves Weight blank');
+    assert.equal('afterWeight' in doc, false, 'an unweighed packet leaves After Weight blank');
     // Mongoose accepts the document as built — nothing violates the schema.
     assert.equal(new DesktopSeedRecord(doc).validateSync(), undefined);
   });
@@ -463,7 +504,7 @@ describe('desktop records — existing packets are made available automatically 
     assert.equal('varietyCode' in doc, false);
   });
 
-  it('a batch without seed-management details copies only Crop, Year, Wearhouse and Rack_shelf', async () => {
+  it('a batch without seed-management details copies only Crop, Year, Wearhouse and Rack_shelf (plus the packet\'s own weights)', async () => {
     usePackets(packetsFixture);
     await call('get', '/', { headers: asRole('admin') });
     const doc = inserted()[0];
@@ -472,22 +513,93 @@ describe('desktop records — existing packets are made available automatically 
     assert.equal(doc.warehouse, 'Warehouse B');
     assert.equal(doc.rackShelf, 'R3-S1');
     const dataKeys = Object.keys(doc).filter((k) => DesktopSeedRecord.DATA_FIELDS.some((f) => f.field === k));
-    assert.deepEqual(dataKeys.sort(), ['crop', 'rackShelf', 'warehouse', 'year']);
+    assert.deepEqual(dataKeys.sort(), ['afterWeight', 'crop', 'rackShelf', 'warehouse', 'weight', 'year']);
+    const unweighed = inserted()[1];
+    const unweighedKeys = Object.keys(unweighed).filter((k) => DesktopSeedRecord.DATA_FIELDS.some((f) => f.field === k));
+    assert.deepEqual(unweighedKeys.sort(), ['crop', 'rackShelf', 'warehouse', 'year']);
   });
 
-  it('leaves Weight, Name Of Variety and Varity_Code blank even when the packet/batch has values', async () => {
+  it('leaves Name Of Variety and Varity_Code blank even when the packet/batch has values', async () => {
     usePackets(packetsFixture);
     await call('get', '/', { headers: asRole('admin') });
     for (const doc of inserted()) {
-      assert.equal('weight' in doc, false);
       assert.equal('varietyName' in doc, false);
       assert.equal('varietyCode' in doc, false);
     }
     // ...and what the schema then stores for those omitted paths is blank.
     const hydrated = new DesktopSeedRecord(inserted()[0]);
-    assert.equal(hydrated.weight, null);
     assert.equal(hydrated.varietyName, '');
     assert.equal(hydrated.varietyCode, '');
+    assert.equal(new DesktopSeedRecord(inserted()[1]).weight, null, 'an unweighed packet stores a blank Weight');
+    assert.equal(new DesktopSeedRecord(inserted()[1]).afterWeight, null, 'an unweighed packet stores a blank After Weight');
+  });
+
+  it('a weighed packet: Weight is its before weight and After Weight its after weight — the difference is not used', async () => {
+    usePackets(packetsFixture);
+    await call('get', '/', { headers: asRole('admin') });
+    const [weighed, empty, orphan] = inserted();
+    assert.equal(weighed.weight, 0.5);
+    assert.equal(weighed.afterWeight, 2.5);
+    assert.equal(Object.values(weighed).includes(2), false, 'difference (2) is not copied anywhere');
+    for (const doc of [empty, orphan]) {
+      assert.equal('weight' in doc, false);
+      assert.equal('afterWeight' in doc, false);
+    }
+    assert.equal(new DesktopSeedRecord(weighed).validateSync(), undefined);
+    assert.deepEqual(bulkWrites(), [], 'a record inserted with its weights needs no fill afterwards');
+  });
+
+  it('an existing record of a packet weighed later gets its blank Weight and After Weight filled — one guarded update per column', async () => {
+    usePackets(packetsFixture, packetsFixture.map((p) => p.uniqueId));
+    const res = await call('get', '/', { headers: asRole('admin') });
+    assert.equal(res.statusCode, 200);
+    assert.equal(inserted().length, 0, 'no record is created twice');
+    assert.equal(bulkWrites().length, 1);
+    const [, ops, options] = bulkWrites()[0];
+    assert.deepEqual(options, { ordered: false });
+    assert.deepEqual(ops, [
+      { updateOne: { filter: { _id: 'rec-PRD-SOYB01-001', weight: null }, update: { $set: { weight: 0.5 }, $inc: { version: 1 } } } },
+      { updateOne: { filter: { _id: 'rec-PRD-SOYB01-001', afterWeight: null }, update: { $set: { afterWeight: 2.5 }, $inc: { version: 1 } } } },
+    ]);
+    assert.equal(writes.filter(([kind]) => kind !== 'bulkWrite').length, 0, 'nothing else is written');
+  });
+
+  it('a weight already in the desktop record is never overwritten — only the blank column is filled', async () => {
+    usePackets(packetsFixture, packetsFixture.map((p) => p.uniqueId), { 'PRD-SOYB01-001': { weight: 0.75, afterWeight: null } });
+    await call('get', '/', { headers: asRole('admin') });
+    assert.deepEqual(bulkWrites()[0][1], [
+      { updateOne: { filter: { _id: 'rec-PRD-SOYB01-001', afterWeight: null }, update: { $set: { afterWeight: 2.5 }, $inc: { version: 1 } } } },
+    ]);
+  });
+
+  it('a packet weighed after a listing is picked up by the next one, which reads only packets changed since', async () => {
+    const stamped = packetsFixture.map((p, i) => ({ ...p, updatedAt: new Date(`2026-10-01T00:00:0${i}.000Z`) }));
+    usePackets(stamped, stamped.map((p) => p.uniqueId), { 'PRD-SOYB01-001': { weight: 0.5, afterWeight: 2.5 } });
+    Admin.findById = async () => ({ _id: 'admin-1', role: 'admin', isActive: true });
+    const router = loadRoutes();
+    const stack = fullStackFor(router, 'get', '/');
+    const list = () => runStack(stack, 0, makeReq({ headers: authHeaderFor('admin-1') }), mockRes());
+
+    await list();
+    assert.deepEqual(bulkWrites(), []);
+
+    // The mobile app weighs the second packet (sessionRoutes.js /link).
+    Object.assign(world.packets[1], { status: 'filled', beforeWeight: 0.4, afterWeight: 1.9, difference: 1.5, updatedAt: new Date('2026-10-15T10:00:00.000Z') });
+    await list();
+    assert.equal(bulkWrites().length, 1);
+    assert.deepEqual(bulkWrites()[0][1].map((op) => [op.updateOne.filter, op.updateOne.update.$set]), [
+      [{ _id: 'rec-PRD-SOYB01-002', weight: null }, { weight: 0.4 }],
+      [{ _id: 'rec-PRD-SOYB01-002', afterWeight: null }, { afterWeight: 1.9 }],
+    ]);
+    assert.equal(weightScans().length, 2);
+    assert.equal(weightScans()[0].filter.updatedAt, undefined, 'the first pass after start-up reads every weighed packet');
+    assert.deepEqual(weightScans()[1].filter.updatedAt, { $gte: new Date('2026-10-01T00:00:02.000Z') });
+    assert.equal(weightScans()[1].select, 'uniqueId beforeWeight afterWeight');
+
+    // Nothing changed since: no further scan, no write.
+    await list();
+    assert.equal(weightScans().length, 2);
+    assert.equal(bulkWrites().length, 1);
   });
 
   it('a packet whose batch is missing still gets a record, with blank derived columns', async () => {
@@ -508,7 +620,7 @@ describe('desktop records — existing packets are made available automatically 
     assert.deepEqual(scan.filter, {});
     assert.deepEqual(scan.sort, { _id: 1 });
     assert.equal(scan.limit, 1000);
-    assert.equal(scan.select, 'uniqueId batchId');
+    assert.equal(scan.select, 'uniqueId batchId beforeWeight afterWeight');
     assert.deepEqual(scan.populate, ['batchId', ['seedType', 'crop', 'year', 'warehouse', 'rack', 'shelf', ...DesktopSeedRecord.BATCH_DETAIL_FIELDS].join(' ')]);
   });
 
@@ -523,14 +635,14 @@ describe('desktop records — existing packets are made available automatically 
   });
 
   it('records that already exist are never touched — only missing ones are inserted', async () => {
-    usePackets(packetsFixture, ['PRD-SOYB01-001', 'PRD-ORPH01-001']);
+    usePackets(packetsFixture, ['PRD-SOYB01-001', 'PRD-ORPH01-001'], { 'PRD-SOYB01-001': { weight: 9, afterWeight: 9 } });
     await call('get', '/', { headers: asRole('admin') });
     assert.deepEqual(inserted().map((d) => d.recordId), ['PKT-PRD-SOYB01-002']);
     assert.equal(writes.filter(([kind]) => kind !== 'insertMany').length, 0, 'no update, no create, nothing else');
   });
 
   it('when every packet already has a record nothing is written at all', async () => {
-    usePackets(packetsFixture, packetsFixture.map((p) => p.uniqueId));
+    usePackets(packetsFixture, packetsFixture.map((p) => p.uniqueId), { 'PRD-SOYB01-001': { weight: 0.5, afterWeight: 2.5 } });
     await call('get', '/', { headers: asRole('admin') });
     assert.deepEqual(writes, []);
   });
@@ -730,7 +842,7 @@ describe('desktop records — GET / (keyset listing)', () => {
     assert.deepEqual(res.body.nextCursor, { since: '2026-01-02T00:00:00.000Z', afterId: '64b000000000000000000001' });
   });
 
-  it('every record carries all 23 columns, blank where nothing is stored', async () => {
+  it('every record carries all 24 columns, blank where nothing is stored', async () => {
     world.listRecords = () => findChain([storedDoc()]);
     const res = await get({});
     const record = res.body.records[0];
@@ -856,17 +968,17 @@ describe('desktop records — rate limiting', () => {
   });
 });
 
-describe('desktop records — the 23-column contract', () => {
+describe('desktop records — the 24-column contract', () => {
   const EXPECTED_HEADERS = [
     'Crop', 'Previous Year', 'Year', 'Year_code', 'PreviousYear_code', 'FarmLocation_code',
     'Female_code', 'Male_code', 'Spt Score', 'Disease score', 'Yield 1', 'Yield 2', 'Total',
     'Name Of Variety', 'Varity_Code', 'PreviousLocation_code', 'Wearhouse', 'Rack_shelf',
-    'Location code', 'Gene', 'Weight', 'Comments', 'Final report',
+    'Location code', 'Gene', 'Weight', 'After Weight', 'Comments', 'Final report',
   ];
 
-  it('exactly the 23 approved headers, in the approved order', () => {
+  it('exactly the 24 approved headers, in the approved order — After Weight right after Weight', () => {
     assert.deepEqual(DesktopSeedRecord.DATA_FIELDS.map((f) => f.header), EXPECTED_HEADERS);
-    assert.equal(DesktopSeedRecord.DATA_FIELDS.length, 23);
+    assert.equal(DesktopSeedRecord.DATA_FIELDS.length, 24);
   });
 
   it('every column is a real schema path of the matching type, with no duplicates', () => {
@@ -879,18 +991,22 @@ describe('desktop records — the 23-column contract', () => {
     }
   });
 
-  it('the columns fixed to the batch are unchanged, and Weight is pre-filled from nowhere', () => {
+  it('the columns fixed to the batch are unchanged; Weight and After Weight come only from the packet\'s saved weights', () => {
     assert.deepEqual(DesktopSeedRecord.PACKET_DERIVED_FIELDS, ['crop', 'year', 'warehouse', 'rackShelf']);
-    for (const editable of ['weight', 'varietyName', 'varietyCode']) {
+    for (const editable of ['weight', 'afterWeight', 'varietyName', 'varietyCode']) {
       assert.equal(DesktopSeedRecord.PACKET_DERIVED_FIELDS.includes(editable), false);
     }
-    assert.equal(DesktopSeedRecord.BATCH_DETAIL_FIELDS.includes('weight'), false);
+    assert.deepEqual(DesktopSeedRecord.PACKET_WEIGHT_FIELDS, { weight: 'beforeWeight', afterWeight: 'afterWeight' });
+    for (const field of ['weight', 'afterWeight']) assert.equal(DesktopSeedRecord.BATCH_DETAIL_FIELDS.includes(field), false);
+    for (const packetField of Object.values(DesktopSeedRecord.PACKET_WEIGHT_FIELDS)) {
+      assert.equal(SeedPacket.schema.path(packetField).instance, 'Number', `SeedPacket.${packetField}`);
+    }
   });
 
-  it('every column is accounted for: fixed to the batch, pre-filled from its details, or Weight', () => {
-    const covered = [...DesktopSeedRecord.PACKET_DERIVED_FIELDS, ...DesktopSeedRecord.BATCH_DETAIL_FIELDS, 'weight'];
+  it('every column is accounted for: fixed to the batch, pre-filled from its details, or a packet weight', () => {
+    const covered = [...DesktopSeedRecord.PACKET_DERIVED_FIELDS, ...DesktopSeedRecord.BATCH_DETAIL_FIELDS, ...Object.keys(DesktopSeedRecord.PACKET_WEIGHT_FIELDS)];
     assert.deepEqual([...covered].sort(), DesktopSeedRecord.DATA_FIELDS.map((f) => f.field).sort());
-    assert.equal(new Set(covered).size, 23);
+    assert.equal(new Set(covered).size, 24);
   });
 
   it('each pre-filled column is a batch detail of the same name and type', () => {

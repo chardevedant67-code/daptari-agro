@@ -8,7 +8,7 @@ const { protect } = require('../middleware/authMiddleware');
 const { allowRoles } = require('../middleware/roleMiddleware');
 const { sendServerError } = require('../utils/errorResponse');
 
-const { DATA_FIELDS, PACKET_DERIVED_FIELDS, BATCH_DETAIL_FIELDS, TEXT_MAX_LENGTH } = DesktopSeedRecord;
+const { DATA_FIELDS, PACKET_DERIVED_FIELDS, BATCH_DETAIL_FIELDS, PACKET_WEIGHT_FIELDS, TEXT_MAX_LENGTH } = DesktopSeedRecord;
 const FIELD_TYPES = new Map(DATA_FIELDS.map(({ field, type }) => [field, type]));
 
 // Every route here requires `protect` — a real, active account in the Admin
@@ -64,7 +64,7 @@ function toPublic(doc) {
   return out;
 }
 
-// Validates and normalizes a client-supplied `fields` object against the 23
+// Validates and normalizes a client-supplied `fields` object against the 24
 // known columns. Only plain strings / finite numbers / null are accepted, so
 // an object or array (e.g. { $ne: null }) can never reach a Mongo update as
 // an operator. Unknown keys are rejected rather than silently dropped.
@@ -109,7 +109,8 @@ function hasAnyValue(clean) {
 //   * SeedPacket / SeedBatch are only read.
 //   * A record that already exists is never touched, so whatever a
 //     Superadmin has since typed into it is not overwritten by packet/batch
-//     values, however often this runs.
+//     values, however often this runs. The one exception is fillPacketWeights
+//     below, which only ever fills a weight column that is still blank.
 //   * The unique indexes on recordId and packetUniqueId make it safe to run
 //     repeatedly and concurrently: a duplicate is rejected by MongoDB and
 //     counted as "already there".
@@ -137,10 +138,22 @@ function batchDetails(batch) {
   return out;
 }
 
-// PACKET_DERIVED_FIELDS plus the batch's saved details are copied. Crop is
-// the batch's own Crop when one was entered, otherwise its seed name as
-// before. Weight is left at its blank default on purpose — its mapping is
-// unconfirmed — as is every column the batch has no value for.
+// The packet's saved weights, by desktop column (see PACKET_WEIGHT_FIELDS).
+// A column is set only when the packet really holds a number for it — an
+// empty packet, or one weighed without that reading, adds nothing.
+function packetWeights(packet) {
+  const out = {};
+  for (const [field, packetField] of Object.entries(PACKET_WEIGHT_FIELDS)) {
+    const value = packet[packetField];
+    if (typeof value === 'number' && Number.isFinite(value)) out[field] = value;
+  }
+  return out;
+}
+
+// PACKET_DERIVED_FIELDS plus the batch's saved details and the packet's
+// weights are copied. Crop is the batch's own Crop when one was entered,
+// otherwise its seed name as before. Every column with no value stays at its
+// blank default.
 function recordFromPacket(packet, createdBy) {
   const batch = packet.batchId && typeof packet.batchId === 'object' ? packet.batchId : null;
   return {
@@ -148,6 +161,7 @@ function recordFromPacket(packet, createdBy) {
     packetUniqueId: packet.uniqueId,
     version:        1,
     ...batchDetails(batch),
+    ...packetWeights(packet),
     crop:           batch ? (cleanText(batch.crop) || (typeof batch.seedType === 'string' ? batch.seedType.trim() : '')) : '',
     year:           batch && typeof batch.year === 'number' ? batch.year : null,
     warehouse:      batch && typeof batch.warehouse === 'string' ? batch.warehouse.trim() : '',
@@ -185,7 +199,7 @@ async function importMissingPackets(createdBy) {
     const packets = await SeedPacket.find(lastId ? { _id: { $gt: lastId } } : {})
       .sort({ _id: 1 })
       .limit(PACKET_SCAN_BATCH)
-      .select('uniqueId batchId')
+      .select('uniqueId batchId beforeWeight afterWeight')
       .populate('batchId', BATCH_SELECT)
       .lean();
     if (!packets.length) break;
@@ -207,20 +221,86 @@ async function importMissingPackets(createdBy) {
   return { totalPackets, created };
 }
 
-// Runs before every listing so that existing packets are simply there — no
-// manual import step. To keep the common case cheap it remembers, per server
-// process, the state of the packet collection (its size and its newest _id,
-// both O(1) lookups) at the last complete pass, and does nothing while that
-// is unchanged. A new batch changes it, and the next listing picks it up.
+// A packet is weighed on the mobile app (sessionRoutes.js /link) after its
+// desktop record usually already exists, so the weights saved on it are
+// carried over here: for every packet holding a weight (changed at or after
+// `since`, when given), each weight column of its PKT- record that is still
+// blank is set to the packet's value. Never overwrites — the update itself
+// matches only while that column is still null, so a value a Superadmin
+// typed meanwhile wins. Each fill bumps the record's version like any other
+// change, so a desktop edit based on the older version gets the usual 409
+// instead of silently replacing it, and updatedAt moves so the next delta
+// sync downloads the row. SeedPacket is only read.
+const PACKET_WEIGHT_SELECT = ['uniqueId', ...Object.values(PACKET_WEIGHT_FIELDS)].join(' ');
+const RECORD_WEIGHT_SELECT = ['packetUniqueId', ...Object.keys(PACKET_WEIGHT_FIELDS)].join(' ');
+
+async function fillPacketWeights(since) {
+  const weighed = { $or: Object.values(PACKET_WEIGHT_FIELDS).map((f) => ({ [f]: { $type: 'number' } })) };
+  const base = since ? { ...weighed, updatedAt: { $gte: since } } : weighed;
+  const blank = { $or: Object.keys(PACKET_WEIGHT_FIELDS).map((f) => ({ [f]: null })) };
+  let filled = 0;
+  let lastId = null;
+  for (;;) {
+    const packets = await SeedPacket.find(lastId ? { ...base, _id: { $gt: lastId } } : base)
+      .sort({ _id: 1 })
+      .limit(PACKET_SCAN_BATCH)
+      .select(PACKET_WEIGHT_SELECT)
+      .lean();
+    if (!packets.length) break;
+    lastId = packets[packets.length - 1]._id;
+
+    const weightsById = new Map();
+    for (const p of packets) {
+      const weights = packetWeights(p);
+      if (typeof p.uniqueId === 'string' && p.uniqueId && Object.keys(weights).length) weightsById.set(p.uniqueId, weights);
+    }
+    const records = weightsById.size
+      ? await DesktopSeedRecord.find({ packetUniqueId: { $in: [...weightsById.keys()] }, ...blank })
+        .select(RECORD_WEIGHT_SELECT)
+        .lean()
+      : [];
+
+    const ops = [];
+    for (const record of records) {
+      for (const [field, value] of Object.entries(weightsById.get(record.packetUniqueId) || {})) {
+        if (record[field] !== null && record[field] !== undefined) continue;
+        ops.push({ updateOne: {
+          filter: { _id: record._id, [field]: null },
+          update: { $set: { [field]: value }, $inc: { version: 1 } },
+        } });
+      }
+    }
+    if (ops.length) {
+      const result = await DesktopSeedRecord.bulkWrite(ops, { ordered: false });
+      filled += result && Number.isInteger(result.modifiedCount) ? result.modifiedCount : 0;
+    }
+
+    if (packets.length < PACKET_SCAN_BATCH) break;
+  }
+  return filled;
+}
+
+// Runs before every listing so that existing packets — and the weights the
+// mobile app saved on them — are simply there, with no manual step. To keep
+// the common case cheap it remembers, per server process, the state of the
+// packet collection (its size, its newest _id and its latest change) at the
+// last complete pass, and does nothing while that is unchanged. A new batch
+// or a newly weighed packet changes it, and the next listing picks it up;
+// the weight pass then reads only packets changed since the previous pass.
 // Concurrent requests share one pass.
-const packetSync = { doneFor: null, running: null };
+const packetSync = { doneFor: null, weightsFrom: null, running: null };
 
 async function packetCollectionState() {
-  const [count, newest] = await Promise.all([
+  const [count, newest, latest] = await Promise.all([
     SeedPacket.estimatedDocumentCount(),
     SeedPacket.findOne().sort({ _id: -1 }).select('_id').lean(),
+    SeedPacket.findOne().sort({ updatedAt: -1 }).select('updatedAt').lean(),
   ]);
-  return `${count}:${newest ? newest._id : ''}`;
+  const changedAt = latest && latest.updatedAt ? new Date(latest.updatedAt) : null;
+  return {
+    key: `${count}:${newest ? newest._id : ''}:${changedAt ? changedAt.getTime() : ''}`,
+    changedAt,
+  };
 }
 
 async function ensurePacketRecords() {
@@ -228,10 +308,17 @@ async function ensurePacketRecords() {
   // packets existed, so its result is re-checked rather than trusted.
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const state = await packetCollectionState();
-    if (packetSync.doneFor === state) return;
+    if (packetSync.doneFor === state.key) return;
     if (!packetSync.running) {
+      const since = packetSync.weightsFrom;
       packetSync.running = importMissingPackets(null)
-        .then(() => { packetSync.doneFor = state; })
+        .then(() => fillPacketWeights(since))
+        .then(() => {
+          packetSync.doneFor = state.key;
+          // Read before this pass began, so a packet weighed while it ran is
+          // read again by the next pass ($gte) rather than skipped.
+          packetSync.weightsFrom = state.changedAt;
+        })
         .finally(() => { packetSync.running = null; });
     }
     await packetSync.running;
