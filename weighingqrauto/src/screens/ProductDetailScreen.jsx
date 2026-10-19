@@ -9,6 +9,7 @@ import Icon from 'react-native-vector-icons/MaterialIcons';
 import {useNavigation, useRoute} from '@react-navigation/native';
 import {COLORS, RADIUS, SHADOWS, SPACING} from '../ui/theme';
 import {BASE_URL} from '../config';
+import {recordedWeight} from '../services/weightSkip';
 
 // Maps seedType keywords → gradient colors + icon + accent
 const SEED_THEMES = {
@@ -177,12 +178,12 @@ export default function ProductDetailScreen() {
             <View style={styles.weightRow}>
               <View style={styles.weightBox}>
                 <Icon name="scale" size={18} color={COLORS.primary} />
-                <Text style={styles.weightVal}>{packet.beforeWeight?.toFixed(2) ?? '—'}</Text>
+                <Text style={styles.weightVal}>{recordedWeight(packet.beforeWeight)}</Text>
                 <Text style={styles.weightLbl}>Before (kg)</Text>
               </View>
               <View style={styles.weightBox}>
                 <Icon name="scale" size={18} color={COLORS.primary} />
-                <Text style={styles.weightVal}>{packet.afterWeight?.toFixed(2) ?? '—'}</Text>
+                <Text style={styles.weightVal}>{recordedWeight(packet.afterWeight)}</Text>
                 <Text style={styles.weightLbl}>After (kg)</Text>
               </View>
               <View style={[styles.weightBox, {borderRightWidth: 0}]}>

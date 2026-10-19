@@ -5,6 +5,7 @@ import Icon from 'react-native-vector-icons/MaterialIcons';
 import {useSelector} from 'react-redux';
 import {COLORS, RADIUS, SHADOWS, SPACING} from '../ui/theme';
 import {fetchPacketHistory} from '../services/api';
+import {averageDifference, skippedNote} from '../services/weightSkip';
 
 const TABS = ['All', 'Gain', 'Loss'];
 
@@ -33,13 +34,13 @@ export default function HistoryScreen() {
 
   const onRefresh = () => { setRefreshing(true); fetchRecords(); };
 
+  // A record with a skipped weight has no difference: it is neither a gain
+  // nor a loss, and is left out of the average rather than counted as 0.
   const filtered = activeTab === 0
     ? records
-    : records.filter(r => (activeTab === 1 ? (r.difference ?? 0) >= 0 : (r.difference ?? 0) < 0));
+    : records.filter(r => typeof r.difference === 'number' && (activeTab === 1 ? r.difference >= 0 : r.difference < 0));
 
-  const avgDiff = records.length
-    ? records.reduce((s, r) => s + (r.difference || 0), 0) / records.length
-    : 0;
+  const avgDiff = averageDifference(records);
 
   const renderItem = ({item}) => {
     const diff = item.difference;
@@ -57,7 +58,7 @@ export default function HistoryScreen() {
         </View>
         <View style={styles.recordRight}>
           <Text style={[styles.recordWeight, {color: iconColor}]}>
-            {diff != null ? `${diff >= 0 ? '+' : ''}${diff.toFixed(2)} kg` : '—'}
+            {diff != null ? `${diff >= 0 ? '+' : ''}${diff.toFixed(2)} kg` : (skippedNote(item) || '—')}
           </Text>
           <Text style={styles.recordTime}>
             {item.afterTime ? new Date(item.afterTime).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : ''}
@@ -96,7 +97,7 @@ export default function HistoryScreen() {
         <View style={styles.summaryDivider} />
         <View style={styles.summaryRight}>
           <Text style={styles.summaryLbl}>AVG DIFFERENCE</Text>
-          <Text style={styles.summaryVal}>{avgDiff >= 0 ? '+' : ''}{avgDiff.toFixed(2)} kg</Text>
+          <Text style={styles.summaryVal}>{avgDiff == null ? '—' : `${avgDiff >= 0 ? '+' : ''}${avgDiff.toFixed(2)} kg`}</Text>
         </View>
       </View>
 

@@ -34,9 +34,13 @@ import {
   linkSessionToPacket,
 } from '../services/api';
 import {addNotification} from '../store/slices/notificationSlice';
-import {weightFieldValue, shownWeight, MESSAGES, WEIGHT_OCR_DEBUG} from '../services/weightOcr';
+import {weightFieldValue, MESSAGES, WEIGHT_OCR_DEBUG} from '../services/weightOcr';
 import DisplayCropModal from '../ui/components/DisplayCropModal';
 import {readWeightWithAI} from '../services/aiWeightRead';
+import {
+  WEIGHT_SAVED, WEIGHT_SKIPPED, canSkipWeight, differenceLabel,
+  measurementSummary, weightDifference, weightLabel,
+} from '../services/weightSkip';
 
 function extractProductId(raw) {
   if (!raw) return null;
@@ -69,6 +73,10 @@ export default function WeighScanScreen() {
   const [afterPhotoUri, setAfterPhotoUri]   = useState(null);
   const [beforeWeightVal, setBeforeWeightVal] = useState('');
   const [afterWeightVal, setAfterWeightVal]   = useState('');
+  // null | WEIGHT_SAVED (the server has it) | WEIGHT_SKIPPED (the user
+  // skipped it — nothing is sent, so the server keeps null, never 0).
+  const [beforeWeightState, setBeforeWeightState] = useState(null);
+  const [afterWeightState, setAfterWeightState]   = useState(null);
   const [linkedPacket, setLinkedPacket] = useState(null);
   const [saving, setSaving]           = useState(false);
   const [error, setError]             = useState('');
@@ -158,6 +166,7 @@ export default function WeighScanScreen() {
 
     setSessionId(null);
     setBeforeWeightVal(''); setAfterWeightVal('');
+    setBeforeWeightState(null); setAfterWeightState(null);
     setBeforePhotoUri(null); setAfterPhotoUri(null);
     setResumedBeforePhotoUrl(null); setResumedAfterPhotoUrl(null);
 
@@ -166,6 +175,8 @@ export default function WeighScanScreen() {
       setSessionId(m.sessionId);
       setBeforeWeightVal(m.beforeWeight != null ? String(m.beforeWeight) : '');
       setAfterWeightVal(m.afterWeight != null ? String(m.afterWeight) : '');
+      setBeforeWeightState(m.beforeWeight != null ? WEIGHT_SAVED : null);
+      setAfterWeightState(m.afterWeight != null ? WEIGHT_SAVED : null);
       setResumedBeforePhotoUrl(m.beforePhotoUrl || null);
       setResumedAfterPhotoUrl(m.afterPhotoUrl || null);
 
@@ -481,6 +492,17 @@ export default function WeighScanScreen() {
     );
   };
 
+  // The session is created on leaving Step 2 (first time only), whether the
+  // before weight is saved or skipped — the photo steps and the after weight
+  // need it either way.
+  const ensureSession = async () => {
+    if (sessionId) return sessionId;
+    creatingSessionRef.current = true;
+    const sid = await createWeighSession(token, packet?.uniqueId);
+    setSessionId(sid);
+    return sid;
+  };
+
   // Step 2 → 3: create the session (first time only) and save the before
   // weight. Any failure keeps the user on this step with a real error —
   // except a genuine "already filled" race, which safely exits the flow
@@ -492,13 +514,9 @@ export default function WeighScanScreen() {
     if (creatingSessionRef.current) return;
     setSaving(true); setError('');
     try {
-      let sid = sessionId;
-      if (!sid) {
-        creatingSessionRef.current = true;
-        sid = await createWeighSession(token, packet?.uniqueId);
-        setSessionId(sid);
-      }
+      const sid = await ensureSession();
       await saveBeforeWeight(token, sid, before);
+      setBeforeWeightState(WEIGHT_SAVED);
       setStep(3);
     } catch (err) {
       if (err.code === 'PACKET_ALREADY_FILLED') {
@@ -509,6 +527,34 @@ export default function WeighScanScreen() {
         return;
       }
       setError(err.message || 'Could not save before weight — please try again');
+    } finally {
+      setSaving(false);
+      creatingSessionRef.current = false;
+    }
+  };
+
+  // Step 2 → 3 without a before weight. Nothing is sent for it, so the
+  // server keeps null (never 0, and never its latest IoT reading — that is
+  // what an empty POST /before-weight would fall back to). Only the session
+  // is created, if it does not exist yet.
+  const handleSkipBeforeWeight = async () => {
+    if (!canSkipWeight(beforeWeightState)) {
+      setError('A before weight is already saved for this session, so it cannot be skipped now — enter the correct weight instead.');
+      return;
+    }
+    if (creatingSessionRef.current) return;
+    setSaving(true); setError('');
+    try {
+      await ensureSession();
+      setBeforeWeightVal('');
+      setBeforeWeightState(WEIGHT_SKIPPED);
+      setStep(3);
+    } catch (err) {
+      if (err.code === 'PACKET_ALREADY_FILLED') {
+        handleAlreadyFilled(err.packet || packet);
+        return;
+      }
+      setError(err.message || 'Could not start the weighing — please try again');
     } finally {
       setSaving(false);
       creatingSessionRef.current = false;
@@ -537,12 +583,26 @@ export default function WeighScanScreen() {
     setSaving(true); setError('');
     try {
       await saveAfterWeight(token, sessionId, after);
+      setAfterWeightState(WEIGHT_SAVED);
       setStep(5);
     } catch (err) {
       setError(err.message || 'Could not save after weight — please try again');
     } finally {
       setSaving(false);
     }
+  };
+
+  // Step 4 → 5 without an after weight. Nothing is sent, so the server keeps
+  // null and computes no difference.
+  const handleSkipAfterWeight = () => {
+    if (!canSkipWeight(afterWeightState)) {
+      setError('An after weight is already saved for this session, so it cannot be skipped now — enter the correct weight instead.');
+      return;
+    }
+    setError('');
+    setAfterWeightVal('');
+    setAfterWeightState(WEIGHT_SKIPPED);
+    setStep(5);
   };
 
   // Step 5 → 6: upload the after photo, then link the session onto the
@@ -558,13 +618,11 @@ export default function WeighScanScreen() {
       const saved = await linkSessionToPacket(token, sessionId, packet.uniqueId);
       setLinkedPacket(saved);
 
-      const before = parseFloat(beforeWeightVal);
-      const after  = parseFloat(afterWeightVal);
-      const diff = saved.difference != null ? saved.difference : (after - before);
+      const diff = saved.difference != null ? saved.difference : weightDifference(beforeWeightVal, afterWeightVal);
       dispatch(addNotification({
         type: 'PASS',
         title: `Measurement Saved — ${packet?.batchId?.seedType || packet?.uniqueId}`,
-        body: `Before ${before.toFixed(2)} kg · After ${after.toFixed(2)} kg · Diff ${diff >= 0 ? '+' : ''}${diff.toFixed(2)} kg`,
+        body: measurementSummary(beforeWeightVal, afterWeightVal, diff),
       }));
       setStep(6);
     } catch (err) {
@@ -731,6 +789,14 @@ export default function WeighScanScreen() {
                   <Icon name="arrow-forward" size={18} color="#fff" />
                 </>}
           </Pressable>
+
+          <Pressable
+            style={[styles.skipWeightBtn, saving && styles.nextBtnDisabled]}
+            disabled={saving}
+            onPress={handleSkipBeforeWeight}>
+            <Icon name="skip-next" size={18} color={COLORS.text} />
+            <Text style={styles.skipWeightTxt}>Skip Before Weight</Text>
+          </Pressable>
         </ScrollView>
       </View>
     );
@@ -755,7 +821,7 @@ export default function WeighScanScreen() {
             </View>
             <View style={{flex: 1}}>
               <Text style={styles.productName}>{packet?.batchId?.seedType || 'Seed Packet'}</Text>
-              <Text style={styles.productMeta}>Before: {shownWeight(beforeWeightVal)} kg</Text>
+              <Text style={styles.productMeta}>Before: {weightLabel(beforeWeightVal, beforeWeightState)}</Text>
             </View>
           </View>
 
@@ -814,9 +880,8 @@ export default function WeighScanScreen() {
 
   // ── STEP 4: AFTER WEIGHT ─────────────────────────
   if (step === 4) {
-    const b = parseFloat(beforeWeightVal);
-    const a = parseFloat(afterWeightVal);
-    const diffPreview = (beforeWeightVal !== '' && afterWeightVal !== '' && !isNaN(b) && !isNaN(a)) ? (a - b) : null;
+    // Only when both are real weights — none after a skipped before weight.
+    const diffPreview = weightDifference(beforeWeightVal, afterWeightVal);
 
     return (
       <View style={styles.root}>
@@ -835,7 +900,7 @@ export default function WeighScanScreen() {
             </View>
             <View style={{flex: 1}}>
               <Text style={styles.productName}>{packet?.batchId?.seedType || 'Seed Packet'}</Text>
-              <Text style={styles.productMeta}>ID: {packet?.uniqueId} · Before: {shownWeight(beforeWeightVal)} kg</Text>
+              <Text style={styles.productMeta}>ID: {packet?.uniqueId} · Before: {weightLabel(beforeWeightVal, beforeWeightState)}</Text>
             </View>
             {(beforePhotoUri || resumedBeforePhotoUrl) && (
               <Image source={{uri: beforePhotoUri || resolvePhotoUri(resumedBeforePhotoUrl)}} style={styles.thumbSmall} resizeMode="cover" />
@@ -883,6 +948,14 @@ export default function WeighScanScreen() {
                   <Icon name="arrow-forward" size={18} color="#fff" />
                 </>}
           </Pressable>
+
+          <Pressable
+            style={[styles.skipWeightBtn, saving && styles.nextBtnDisabled]}
+            disabled={saving}
+            onPress={handleSkipAfterWeight}>
+            <Icon name="skip-next" size={18} color={COLORS.text} />
+            <Text style={styles.skipWeightTxt}>Skip After Weight</Text>
+          </Pressable>
         </ScrollView>
       </View>
     );
@@ -907,7 +980,7 @@ export default function WeighScanScreen() {
             </View>
             <View style={{flex: 1}}>
               <Text style={styles.productName}>{packet?.batchId?.seedType || 'Seed Packet'}</Text>
-              <Text style={styles.productMeta}>After: {shownWeight(afterWeightVal)} kg</Text>
+              <Text style={styles.productMeta}>After: {weightLabel(afterWeightVal, afterWeightState)}</Text>
             </View>
           </View>
 
@@ -967,9 +1040,10 @@ export default function WeighScanScreen() {
   }
 
   // ── STEP 6: DONE ─────────────────────────────────
+  // Never a skipped weight counted as 0: no difference unless both are real.
   const finalDiff = linkedPacket?.difference != null
     ? linkedPacket.difference
-    : (parseFloat(afterWeightVal || 0) - parseFloat(beforeWeightVal || 0));
+    : weightDifference(beforeWeightVal, afterWeightVal);
   // linkedPacket mirrors the session's photo URLs, so it covers the resumed
   // case too (where the photo was uploaded in an earlier app visit and no
   // local file URI exists any more).
@@ -993,9 +1067,9 @@ export default function WeighScanScreen() {
         <View style={styles.doneCard}>
           <DoneRow label="Packet ID" value={linkedPacket?.uniqueId || packet?.uniqueId} mono />
           <DoneRow label="Batch"     value={packet?.batchId?.batchNumber} mono />
-          <DoneRow label="Before"    value={`${shownWeight(beforeWeightVal)} kg`} />
-          <DoneRow label="After"     value={`${shownWeight(afterWeightVal)} kg`} />
-          <DoneRow label="Difference" value={`${finalDiff >= 0 ? '+' : ''}${finalDiff.toFixed(2)} kg`} bold color={COLORS.primary} />
+          <DoneRow label="Before"    value={weightLabel(beforeWeightVal, beforeWeightState)} />
+          <DoneRow label="After"     value={weightLabel(afterWeightVal, afterWeightState)} />
+          <DoneRow label="Difference" value={differenceLabel(finalDiff)} bold color={COLORS.primary} />
           <DoneRow label="Before Photo" value={doneBeforePhotoUri ? 'Saved & linked ✓' : 'Skipped'} />
           <DoneRow label="After Photo"  value={doneAfterPhotoUri ? 'Saved & linked ✓' : 'Skipped'} />
           <DoneRow label="Time"      value={new Date().toLocaleTimeString()} />
@@ -1095,6 +1169,8 @@ const styles = StyleSheet.create({
   nextBtn:         {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: COLORS.primary, borderRadius: RADIUS.md, height: 52, ...SHADOWS.primary},
   nextBtnDisabled: {opacity: 0.4},
   nextBtnTxt:      {color: '#fff', fontSize: 15, fontWeight: '700'},
+  skipWeightBtn:   {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderWidth: 1.5, borderColor: COLORS.border, borderRadius: RADIUS.md, height: 48, backgroundColor: COLORS.white},
+  skipWeightTxt:   {fontSize: 14, fontWeight: '700', color: COLORS.text},
   skipLink:        {alignItems: 'center', paddingVertical: 4},
   skipTxt:         {fontSize: 13, color: COLORS.muted},
   errTxt:          {fontSize: 13, color: COLORS.danger, textAlign: 'center'},
