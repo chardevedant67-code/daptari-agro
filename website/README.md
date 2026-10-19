@@ -52,7 +52,7 @@ its syntax with `node --check` and the download rules with a built-in self-test.
 Both download links are set in **`src/js/downloads.config.js`**, one entry per platform:
 
 ```js
-android: { url: 'https://github.com/chardevedant67-code/daptari-agro/releases/download/apps-v1.0/WeighingQR-Android-1.0.apk', fileName: 'WeighingQR-Android-1.0.apk', ... }
+android: { url: 'https://github.com/chardevedant67-code/daptari-agro/releases/download/apps-v1.1/app-release.apk', fileName: 'app-release.apk', ... }
 windows: { url: 'https://github.com/chardevedant67-code/daptari-agro/releases/download/apps-v1.0/SeedManagement-Setup-0.1.1.exe', fileName: 'SeedManagement-Setup-0.1.1.exe', ... }
 ```
 
@@ -71,11 +71,12 @@ The published files:
 
 | | Android | Windows |
 |---|---|---|
-| Release asset | `WeighingQR-Android-1.0.apk` | `SeedManagement-Setup-0.1.1.exe` |
+| Release | `apps-v1.1` | `apps-v1.0` |
+| Release asset | `app-release.apk` | `SeedManagement-Setup-0.1.1.exe` |
 | Built from | `weighingqrauto/android/app/build/outputs/apk/release/app-release.apk` | `weighingdesktop/release/Seed Management Setup 0.1.1.exe` |
-| Size | 327,258,922 bytes (312 MB) | 116,139,210 bytes (111 MB) |
-| SHA-256 | `833daebd3fd3d5da4a0a29b0ebd4009ba5777ecc1afa59c7ef8182a619e75f99` | `e540aa443f9b90550b0ac915f4dbd9d5e84342bfc957c6e860672f5915890514` |
-| Version | 1.0 (versionCode 1), signed with the release key | 0.1.1, not code-signed |
+| Size | 327,265,846 bytes (312 MB) | 116,139,210 bytes (111 MB) |
+| SHA-256 | `5d47dff0187f9dd52d41007152605fcb0566c91716afcf7764935d2558918a78` | `e540aa443f9b90550b0ac915f4dbd9d5e84342bfc957c6e860672f5915890514` |
+| Version | 1.1 (versionCode 2), signed with the release key | 0.1.1, not code-signed |
 
 If you publish a rebuilt installer, update `fileName`, `version`, `sizeBytes` and `sha256` too.
 To get the SHA-256 on Windows, run `Get-FileHash -Algorithm SHA256 <file>` in PowerShell.
@@ -92,9 +93,9 @@ not changed. Add `--host 0.0.0.0` to test the APK download from a phone on the s
 
 ## Published installers
 
-Both installers are assets of the GitHub Release
-[`apps-v1.0`](https://github.com/chardevedant67-code/daptari-agro/releases/tag/apps-v1.0)
-in this repository. They are not in git; `website/.gitignore` excludes `*.apk` and `*.exe`.
+The installers are assets of GitHub Releases in this repository: Android in
+[`apps-v1.1`](https://github.com/chardevedant67-code/daptari-agro/releases/tag/apps-v1.1),
+Windows in [`apps-v1.0`](https://github.com/chardevedant67-code/daptari-agro/releases/tag/apps-v1.0). They are not in git; `website/.gitignore` excludes `*.apk` and `*.exe`.
 GitHub's own SHA-256 digest and size for each asset match the table above.
 
 To publish a new version:

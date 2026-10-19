@@ -1,8 +1,8 @@
 // Download configuration — the ONLY place the installer links are set.
 //
-// Both installers are published as assets of the GitHub Release
-// `apps-v1.0` in chardevedant67-code/daptari-agro (see README →
-// "Published installers"). An empty `url` would make the site show
+// The installers are published as GitHub Release assets in
+// chardevedant67-code/daptari-agro: Android in `apps-v1.1`, Windows in
+// `apps-v1.0` (see README → "Published installers"). An empty `url` would make the site show
 // "not available yet" instead of a download button; it never points at a
 // guessed or placeholder address.
 //
@@ -17,13 +17,13 @@
 
 export const DOWNLOADS = {
   android: {
-    url: 'https://github.com/chardevedant67-code/daptari-agro/releases/download/apps-v1.0/WeighingQR-Android-1.0.apk',
+    url: 'https://github.com/chardevedant67-code/daptari-agro/releases/download/apps-v1.1/app-release.apk',
     productName: 'WeighingQR for Android',
-    fileName: 'WeighingQR-Android-1.0.apk',
+    fileName: 'app-release.apk',
     format: 'APK',
-    version: '1.0 (build 1)',
-    sizeBytes: 327258922,
-    sha256: '833daebd3fd3d5da4a0a29b0ebd4009ba5777ecc1afa59c7ef8182a619e75f99',
+    version: '1.1 (build 2)',
+    sizeBytes: 327265846,
+    sha256: '5d47dff0187f9dd52d41007152605fcb0566c91716afcf7764935d2558918a78',
     requirements: 'Android 7.0 or later, a camera and internet access. Keep roughly 700 MB free while installing (the download itself is 312 MB).',
     note: 'Signed release build. Compatibility depends on your device.',
   },
